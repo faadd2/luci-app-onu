@@ -1,0 +1,15 @@
+{
+	"luci-app-onu-migrate": {
+		"description": "Grant access to ONU 配置迁移 module",
+		"read": {
+			"uci": [
+				"network"
+			]
+		},
+		"write": {
+			"uci": [
+				"network"
+			]
+		}
+	}
+}

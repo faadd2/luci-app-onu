@@ -1,0 +1,73 @@
+{
+	"admin/onu": {
+		"title": "ONU",
+		"order": 20,
+		"action": {
+			"type": "firstchild"
+		},
+		"depends": {
+			"acl": [ "luci-app-onu" ]
+		}
+	},
+	"admin/onu/status": {
+		"title": "PON 状态",
+		"order": 10,
+		"action": {
+			"type": "view",
+			"path": "onu/status"
+		}
+	},
+	"admin/onu/optical": {
+		"title": "光链路",
+		"order": 15,
+		"action": {
+			"type": "view",
+			"path": "onu/optical"
+		},
+		"depends": {
+			"acl": [ "luci-app-onu" ]
+		}
+	},
+	"admin/onu/config": {
+		"title": "认证配置",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "onu/config"
+		}
+	},
+	"admin/onu/hardware": {
+		"title": "硬件身份",
+		"order": 30,
+		"action": {
+			"type": "view",
+			"path": "onu/hardware"
+		},
+		"depends": {
+			"acl": [ "luci-app-onu" ],
+			"fs": { "/tmp/pon-board-identity.available": "file" }
+		}
+	},
+	"admin/onu/events": {
+		"title": "事件日志",
+		"order": 35,
+		"action": {
+			"type": "view",
+			"path": "onu/events"
+		},
+		"depends": {
+			"acl": [ "luci-app-onu" ]
+		}
+	},
+	"admin/onu/diagnostics": {
+		"title": "光路诊断",
+		"order": 50,
+		"action": {
+			"type": "view",
+			"path": "onu/diagnostics"
+		},
+		"depends": {
+			"fs": { "/usr/libexec/airoha-pon-debug": "executable" }
+		}
+	}
+}

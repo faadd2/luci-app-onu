@@ -1,0 +1,4 @@
+config acs 'settings'
+	option enabled '0'
+	option periodic_inform '1'
+	option inform_interval '3600'

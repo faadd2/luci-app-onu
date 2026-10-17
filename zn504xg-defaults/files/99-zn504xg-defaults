@@ -1,0 +1,29 @@
+#!/bin/sh
+# ZN504XG-D first-boot defaults
+# 1) firewall flow offloading (SW + HW): NAT fast path via AN7581 NPU.
+#    Note: PPPoE flows are NOT hardware-offloaded on this platform (limitation).
+# 2) remove dead apk distfeeds that 404 on every 'apk update'
+# 3) convenience symlink for ookla speedtest
+# 4) CPU governor: powersave@500MHz caps routing at ~250M; ondemand reaches
+#    ~590M on a 500M plan (PPE-bind investigation 2026-10-16, build-21 measured)
+uci -q get firewall.@defaults[0] >/dev/null 2>&1 && {
+	uci set firewall.@defaults[0].flow_offloading='1'
+	uci set firewall.@defaults[0].flow_offloading_hw='1'
+	uci commit firewall
+}
+
+DISTFEEDS=/etc/apk/repositories.d/distfeeds.list
+[ -f "$DISTFEEDS" ] && sed -i -E \
+	's|^(https://downloads.immortalwrt.org/snapshots/packages/aarch64_cortex-a53/(pon_drivers|pon_userspace|video)/.*)$|#\1|' \
+	"$DISTFEEDS"
+
+[ -x /usr/bin/ookla-speedtest ] && [ ! -e /usr/bin/speedtest ] && \
+	ln -sf /usr/bin/ookla-speedtest /usr/bin/speedtest
+
+for p in /sys/devices/system/cpu/cpufreq/policy*; do
+	[ -f "$p/scaling_available_governors" ] && \
+		grep -qw ondemand "$p/scaling_available_governors" && \
+		echo ondemand > "$p/scaling_governor" 2>/dev/null
+done
+
+exit 0

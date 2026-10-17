@@ -1,0 +1,7 @@
+config onu_ims 'ims'
+	option phone ''
+	option sip_account ''
+	option sip_password ''
+	option proxy ''
+	option reg_period '1800'
+	option media_ports '9000-9010'

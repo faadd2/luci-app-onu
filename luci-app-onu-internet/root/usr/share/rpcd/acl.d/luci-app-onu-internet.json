@@ -1,0 +1,37 @@
+{
+	"luci-app-onu-internet": {
+		"description": "Grant access to ONU 上网 module",
+		"read": {
+			"uci": [
+				"network"
+			],
+			"ubus": {
+				"file": [
+					"exec"
+				]
+			},
+			"file": {
+				"/sbin/ifstatus wan": [
+					"exec"
+				],
+				"/bin/ping -c *": [
+					"exec"
+				],
+				"/sbin/ifdown wan": [
+					"exec"
+				],
+				"/sbin/ifup wan": [
+					"exec"
+				],
+				"/sbin/ubus call network reload": [
+					"exec"
+				]
+			}
+		},
+		"write": {
+			"uci": [
+				"network"
+			]
+		}
+	}
+}
