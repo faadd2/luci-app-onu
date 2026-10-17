@@ -1,0 +1,13 @@
+{
+  "luci-app-speedcheck": {
+    "description": "Grant access to speedcheck",
+    "read": {
+      "file": {
+        "/bin/sh": [ "exec" ],
+        "/bin/cat": [ "exec" ],
+        "/usr/bin/speedcheck.sh": [ "exec" ],
+        "/tmp/speedcheck.log": [ "read" ]
+      }
+    }
+  }
+}

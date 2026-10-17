@@ -1,0 +1,28 @@
+{
+	"luci-app-onu-iptv": {
+		"description": "Grant access to ONU IPTV module",
+		"read": {
+			"uci": [
+				"network"
+			],
+			"ubus": {
+				"file": [
+					"exec"
+				]
+			},
+			"file": {
+				"/sbin/ifstatus iptv": [
+					"exec"
+				],
+				"/bin/ping -c *": [
+					"exec"
+				]
+			}
+		},
+		"write": {
+			"uci": [
+				"network"
+			]
+		}
+	}
+}

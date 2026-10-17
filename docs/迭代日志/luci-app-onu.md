@@ -1,0 +1,48 @@
+# luci-app-onu 迭代日志
+
+> 提取自旧库 git 历史（44 提交），已做隐私串扫描（零命中），提取时间 2026-10-17；旧库已删，历史完整存档于 backups/repo-mirror/
+
+- 1e40398 (2026-10-17) privacy(voice): remove hardcoded IMS account from view, make it UCI-configurable
+- 9fbd00c (2026-10-16) feat(defaults): 首次启动默认 CPU governor=ondemand
+- 2066521 (2026-10-16) fix(npu): GDM 端口标签对齐 ZN504XG-D 板级布局（dts 实证）
+- ac35158 (2026-10-16) fix(speedcheck): busybox 兼容——setsid 防 SIGHUP + flock FD 持有式
+- ee47f8e (2026-10-16) fix(speedcheck): 后端脚本对齐 LuCI 契约 + 修正脚本执行位
+- 3c421db (2026-10-16) fix(pond): onu-pond-patch 补 git 执行位——100644 进固件丢 +x，rpcd 后端无法执行（build-21 刷机实证，A 设备侧 chmod 手动恢复）
+- 497bbf6 (2026-10-16) fix(diagnostics): 兼容 ucode dispatcher 版 luci.js 的 render 单参数传入
+- aae15da (2026-10-16) fix(migrate): 补 BuildPackage 扫描签名注释——scan.mk GREP_STRING 缺此注释整包被跳过，luci-app-onu-migrate 从未进固件（build-20 manifest 实证）
+- c3fc44f (2026-10-15) fix(airoha-npu): 补 rpcd ACL——menu.d depends.acl 引用此组，缺文件则菜单不渲染/ubus 调用被拒
+- fc81f2e (2026-10-15) feat(diagnostics): PON 补丁开关——状态+应用按钮，配 onu-pond-patch 后端
+- 7712480 (2026-10-14) fix(theme): 迁移页标题行左对齐 + 继承正文高对比色
+- f9dada4 (2026-10-14) fix(theme): 暗色主题 label 徽标/表格标题行修复（onu.css 动态加载 + onu-scope 作用域）
+- 23a2568 (2026-10-14) migrate view: fix preview table rendering (rows array nested in E() children was stringified to [object HTMLTableRowElement]...); flatten via [titles].concat(rows)
+- 05e85d7 (2026-10-14) migrate parser: fix Youhua applicationtype mapping for Beijing Unicom (was swapped 1/2)
+- f773eb0 (2026-10-14) luci-app-onu-mgmt: add Makefile (LUCI_DEPENDS +tcpdump-mini per acl exec list) so the ACS management page can be packaged into firmware, not only direct-deployed
+- f50a168 (2026-10-14) Rename core package PKG_NAME to luci-app-onu (was luci-app-pon): eliminates conflict with upstream pbs05 feed luci-app-pon; align internet/iptv/voice LUCI_DEPENDS to +luci-app-onu (reverts b17c110 workaround); drop stale duplicate po/zh_Hans/onu.po (pon.po is the generated superset); README: module table adds mgmt/migrate, conflict note updated
+- b17c110 (2026-10-14) Fix unresolvable DEPENDS: submodules referenced +luci-app-onu but the package's PKG_NAME is luci-app-pon (renamed upstream), so internet/iptv/voice had unsatisfiable deps and netspeedtest's homebox/ookla-speedtest don't exist in the ponwrt feed — both broke rootfs package/install (build run 38427745777)
+- 6d634d7 (2026-10-14) Add OpenWrt buildroot signature comment to Makefiles: without 'call BuildPackage' the metadata scanner (scan.mk GREP_STRING) never picks up luci.mk-based packages in package/, symbols vanish at defconfig (root cause of custom packages missing from all firmware builds)
+- 4bc5a02 (2026-10-13) menu: move ACS 管理 before 配置迁移 (order 46), next to business line pages
+- caaa8fd (2026-10-13) deploy_suite: move onu-mgmt.js into place on full deploy
+- c1b0d5c (2026-10-13) luci-app-onu-mgmt: ACS (TR-069) management page phase 1 - client detection, ACS param staging (uci acs), raw packet capture on pon0 7547/9090 with text log + pcap download
+- 256648a (2026-10-13) optical: badge() wrap for FEC grade, Chinese MPCP state labels; menu: rename diagnostics to 光路诊断, move 配置迁移 after 语音 (order 48)
+- ee9435f (2026-10-13) optical: fix row() String() coercion ([object HTMLSpanElement]), clamp FEC ratio torn reads, rework trend chart (gaps on counter reset, constant-series padding, non-overlapping labels)
+- f2faa43 (2026-10-13) migrate parser: return class at module top level (IIFE return was discarded)
+- a5eb530 (2026-10-13) migrate parser: adapt to PonWrt LuCI module scope (no baseclass global)
+- 02190c4 (2026-10-13) migrate: fix LuCI module export (baseclass.extend); editable service assignment
+- ac9e837 (2026-10-13) luci-app-onu-migrate: config migration wizard (upload → parse preview → apply UCI)
+- c76985b (2026-10-13) Add speedcheck, fixed netspeedtest, airoha-npu (zh-cn), zn504xg-defaults
+- d91d802 (2026-10-13) internet: keep element nodes in status rows (fix [object HTMLSpanElement])
+- f700f1b (2026-10-13) iptv/voice: await map render; iptv row keeps element nodes; voice ACL ifstatus voip
+- e78b820 (2026-10-13) internet: await map render (fix [object Promise]); guard null ifstatus; fix ACL cmd (ifstatus wan)
+- 99dacf5 (2026-10-13) internet: add missing 'require ui' (fixes ReferenceError on 上网 page)
+- d72f5b6 (2026-10-11) deploy: add direct-install script for the super ONU suite
+- 695ded1 (2026-10-11) Restructure into super ONU suite (luci-app-onu)
+- b2db706 (2026-10-11) luci-app-pon: enhanced fork (zh-CN, optical link, event log, patch info)
+- 3295adf (2026-09-26) Merge pull request #2 from 22p/main
+- 0e83331 (2026-09-26) Merge pull request #4 from nyacat/airoha-pond-huawei-mes
+- ac583fc (2026-09-26) airoha-pond: report a timeout when PLOAM does not assign an Alloc-ID
+- 1a1c119 (2026-09-26) airoha-pond: show the OLT broadcast key indexes
+- 90d8ac2 (2026-09-26) airoha-pond: report data paths waiting for a PLOAM Alloc-ID
+- 69c5dce (2026-09-26) luci-app-pon: restore status table styling on OpenWrt themes
+- f6f0475 (2026-09-24) luci-app-pon: fix action button readonly state
+- bbe7202 (2026-09-24) fix(omci): preserve CTC LOID authentication state
+- efdfba1 (2026-09-23) Initial import of OpenWrt PON userspace

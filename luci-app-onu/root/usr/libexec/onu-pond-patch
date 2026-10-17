@@ -1,0 +1,66 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# onu-pond-patch —— PON 补丁开关的 LuCI/rpcd 后端（luci-app-onu 仓库自有）
+#
+#   status        输出 JSON：开关状态 + 当前 airoha-pond 二进制身份 + 补丁版本
+#   set 0|1       写 UCI（pon.general.epon_ctc_patch）并执行切换脚本
+#                 （安装对应二进制并重启 airoha-pond），输出 JSON 结果
+#
+# 二进制身份按 md5 判定；切换逻辑本体在 /usr/sbin/pond-patch-switch.sh
+#（zn504xg-onu-build 叠加层提供），本脚本只做参数规整与 JSON 输出。
+
+PATCHED_MD5=0ee93a7a240c04bf248a2cdaca0f447c
+STOCK_MD5=9abf8905eb5aa1446974999092650239
+BIN=/usr/sbin/airoha-pond
+SWITCH=/usr/sbin/pond-patch-switch.sh
+
+json_escape() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+cmd_status() {
+	local en active cur ver
+	en=$(uci -q get pon.general.epon_ctc_patch)
+	case "$en" in
+		1) en=1 ;;
+		*) en=0 ;;
+	esac
+	cur=$(md5sum "$BIN" 2>/dev/null | awk '{print $1}')
+	case "$cur" in
+		"$PATCHED_MD5") active=patched ;;
+		"$STOCK_MD5") active=stock ;;
+		*) active=unknown ;;
+	esac
+	ver=$(head -c 200 /etc/pon-fix-version 2>/dev/null)
+	printf '{"enabled":%s,"active":"%s","version":"%s"}\n' \
+		"$en" "$active" "$(json_escape "$ver")"
+}
+
+cmd_set() {
+	local v=$1 out rc
+	case "$v" in
+		0|1) ;;
+		*) printf '{"ok":false,"error":"bad value"}\n'; return 1 ;;
+	esac
+	uci -q get pon.general >/dev/null 2>&1 || uci set pon.general='general'
+	uci set pon.general.epon_ctc_patch="$v" && uci commit pon || {
+		printf '{"ok":false,"error":"uci commit failed"}\n'
+		return 1
+	}
+	out=$("$SWITCH" 2>&1)
+	rc=$?
+	if [ "$rc" -eq 0 ]; then
+		printf '{"ok":true,"output":"%s"}\n' "$(json_escape "$out")"
+	else
+		printf '{"ok":false,"output":"%s"}\n' "$(json_escape "$out")"
+	fi
+}
+
+case "$1" in
+	status) cmd_status ;;
+	set) cmd_set "$2" ;;
+	*)
+		echo "usage: $0 {status|set 0|1}" >&2
+		exit 2
+		;;
+esac

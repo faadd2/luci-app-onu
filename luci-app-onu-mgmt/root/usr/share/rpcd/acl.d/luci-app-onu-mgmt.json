@@ -1,0 +1,21 @@
+{
+	"luci-app-onu-mgmt": {
+		"description": "Grant access to ONU ACS (TR-069) management",
+		"read": {
+			"uci": [ "acs", "network" ],
+			"file": {
+				"/tmp/acs-capture.log": [ "read" ],
+				"/tmp/acs-capture.pid": [ "read" ],
+				"/tmp/acs-capture.pcap": [ "read" ]
+			},
+			"exec": [ "/bin/sh", "/usr/bin/tcpdump" ]
+		},
+		"write": {
+			"uci": [ "acs" ],
+			"file": {
+				"/tmp/acs-capture.pid": [ "write" ]
+			},
+			"exec": [ "/bin/sh", "/bin/kill", "/usr/bin/tcpdump" ]
+		}
+	}
+}

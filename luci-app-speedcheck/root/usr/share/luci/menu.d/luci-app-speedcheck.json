@@ -1,0 +1,10 @@
+{
+  "admin/network/speedcheck": {
+    "title": "真实带宽测试",
+    "order": 95,
+    "action": {
+      "type": "view",
+      "path": "speedcheck/speedcheck"
+    }
+  }
+}
