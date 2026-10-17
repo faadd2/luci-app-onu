@@ -155,6 +155,12 @@ msgstr "ONU 短型号"
 msgid "Firmware version"
 msgstr "固件版本"
 
+msgid "Build tag"
+msgstr "构建标记"
+
+msgid "Not marked in this firmware build"
+msgstr "该固件构建未标记版本"
+
 msgid "Chipset ID"
 msgstr "芯片组 ID"
 

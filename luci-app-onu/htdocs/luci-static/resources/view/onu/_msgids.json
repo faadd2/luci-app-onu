@@ -52,6 +52,8 @@
   "IEEE 802.3ah + CTC",
   "ONU short model",
   "Firmware version",
+  "Build tag",
+  "Not marked in this firmware build",
   "Chipset ID",
   "Ethernet port count",
   "PON board data",

@@ -22,6 +22,8 @@
 				"/sys/kernel/debug/airoha-xpon-pon0/mac": [ "read" ],
 				"/sys/kernel/debug/airoha-xpon-pon0/line": [ "read" ],
 				"/etc/pon-fix-version": [ "read" ],
+				"/bin/cat /rom/etc/pon-build-tag": [ "exec" ],
+				"/bin/cat /etc/pon-build-tag": [ "exec" ],
 				"/tmp/pon-debug.tar.gz": [ "read" ]
 			}
 		},

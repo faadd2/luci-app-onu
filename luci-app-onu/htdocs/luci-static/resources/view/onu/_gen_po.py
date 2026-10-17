@@ -56,6 +56,8 @@ ZH = {
  'IEEE 802.3ah + CTC': 'IEEE 802.3ah + CTC（电信互通）',
  'ONU short model': 'ONU 短型号',
  'Firmware version': '固件版本',
+ 'Build tag': '构建标记',
+ 'Not marked in this firmware build': '该固件构建未标记版本',
  'Chipset ID': '芯片组 ID',
  'Ethernet port count': '以太网端口数',
  'PON board data': 'PON 板级数据',
