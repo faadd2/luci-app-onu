@@ -99,7 +99,7 @@ return view.extend({
 			]);
 		});
 
-		return new tabs([
+		return tabs.render([
 			{ name: '配置', content: cfgPane },
 			{ name: '状态', content: self.statusBox },
 			{
@@ -135,7 +135,7 @@ return view.extend({
 					])
 				])
 			}
-		]).render().then(function(node) {
+		]).then(function(node) {
 			return E('div', { 'class': 'cbi-map onu-scope' }, node);
 		});
 	},

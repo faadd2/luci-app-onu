@@ -131,7 +131,7 @@ return view.extend({
 		return m.render().then(function(mapNode) {
 			return a.render().then(function(imsNode) {
 				this.refreshStatus();
-				return new tabs([
+				return tabs.render([
 					{
 						name: '配置', content: E('div', {}, [
 							mapNode,
@@ -146,7 +146,7 @@ return view.extend({
 					},
 					{ name: '状态', content: E('div', {}, [this.statusBox, this.pingBox]) },
 					{ name: '调试', content: this.debugBox }
-				]).render().then(function(node) {
+				]).then(function(node) {
 					return E('div', { 'class': 'cbi-map onu-scope' }, node);
 				});
 			}.bind(this));

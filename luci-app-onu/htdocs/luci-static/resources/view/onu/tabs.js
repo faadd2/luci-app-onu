@@ -1,23 +1,20 @@
 'use strict';
 /*
  * ONU 连接管理页通用分页组件（仿 LuCI 系统/状态页 tabs）
- * 用法：'require view.onu.tabs as tabs';（LuCI 不带 as 时默认变量名是全路径转下划线 view_onu_tabs）
- *   var t = new tabs([{name:'配置', content: nodeOrPromise}, ...]);
- *   return t.render(); // -> Element
+ * 用法：'require view.onu.tabs as tabs';
+ *   return tabs.render([{name:'配置', content: nodeOrPromise}, ...]); // -> Promise<Element>
  * content 可为 DOM 节点或 Promise（render 后 resolve 成节点）
+ * 注意：LuCI require 返回的是模块类的单例实例（luci.js classes[name]=instance），
+ *       不能 new，故本组件为无状态设计，分页列表作为 render 参数传入。
  */
 return L.Class.extend({
-	__init__: function(tabs) {
-		this.tabs = tabs || [];
-	},
-
-	render: function() {
+	render: function(tabList) {
 		var root = E('div', { 'class': 'cbi-tabs' });
 		var menu = E('div', { 'class': 'cbi-tabs-menu' });
 		var panes = [];
 		var loaded = [];
 
-		this.tabs.forEach(function(t, i) {
+		(tabList || []).forEach(function(t, i) {
 			menu.appendChild(E('a', {
 				'href': '#',
 				'class': 'cbi-tab' + (i === 0 ? ' active' : ''),

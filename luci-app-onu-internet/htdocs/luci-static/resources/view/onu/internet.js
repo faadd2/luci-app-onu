@@ -86,7 +86,7 @@ return view.extend({
 				'style': 'max-height: 18em; overflow: auto; margin: 0.5rem 1rem 1rem; padding: 0.5em; ' +
 					'background: rgba(127,127,127,0.08); font-size: 0.8125rem; white-space: pre-wrap;'
 			}, '点击「刷新日志」加载。');
-			return new tabs([
+			return tabs.render([
 				{
 					name: '配置', content: E('div', {}, [
 						mapNode,
@@ -123,7 +123,7 @@ return view.extend({
 						self.debugLog
 					])
 				}
-			]).render().then(function(node) {
+			]).then(function(node) {
 				return E('div', { 'class': 'cbi-map onu-scope' }, node);
 			});
 		});

@@ -184,7 +184,7 @@ return view.extend({
 
 		return m.render().then(function(mapNode) {
 			self.refreshStatus();
-			return new tabs([
+			return tabs.render([
 				{ name: '配置', content: E('div', {}, [mapNode, self.mcBox]) },
 				{ name: '状态', content: self.statusBox },
 				{
@@ -203,7 +203,7 @@ return view.extend({
 						self.debugLog
 					])
 				}
-			]).render();
+			]);
 		});
 	},
 
