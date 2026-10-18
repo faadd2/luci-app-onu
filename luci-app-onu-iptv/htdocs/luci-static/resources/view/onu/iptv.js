@@ -21,17 +21,37 @@ function parseVid(device) {
 	return m ? m[1] : '';
 }
 
+function prefixToMask(p) {
+	p = Number(p);
+	if (!p || p < 1 || p > 32) return '';
+	var mask = [];
+	for (var i = 0; i < 4; i++) {
+		var n = Math.max(0, Math.min(8, p - i * 8));
+		mask.push(256 - Math.pow(2, 8 - n));
+	}
+	return mask.join('.');
+}
+
 return view.extend({
 	load: function() {
 		return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c',
 			'apk list --installed 2>/dev/null | grep -E "^(omcproxy|igmpproxy)-" ; echo ---; ' +
 			'/etc/init.d/omcproxy enabled 2>/dev/null && echo OMCP_EN || echo OMCP_DIS; ' +
-			'pidof omcproxy igmpproxy 2>/dev/null | tr "\\n" " "'
+			'pidof omcproxy igmpproxy 2>/dev/null | tr "\\n" " "; echo ===IF===; ' +
+			'ifstatus iptv 2>/dev/null'
 		]), '');
 	},
 
-	render: function(pkgText) {
+	render: function(allText) {
 		var self = this;
+		var parts = String(allText || '').split('===IF===');
+		var pkgText = parts[0] || '';
+		var ifText = parts[1] || '{}';
+		var lease = {};
+		try { lease = JSON.parse(ifText) || {}; } catch (e) {}
+		var leaseIp = ((lease['ipv4-address'] || [])[0] || {}).address || '';
+		var leaseMask = prefixToMask(((lease['ipv4-address'] || [])[0] || {}).mask);
+
 		var mc = { omcproxy: false, igmpproxy: false };
 		String(pkgText || '').split('\n').forEach(function(l) {
 			if (/^omcproxy-/.test(l)) mc.omcproxy = true;
@@ -69,11 +89,14 @@ return view.extend({
 		o.datatype = 'ip4addr';
 		o.depends('_enable', '1');
 		o.depends('proto', 'static');
+		o.cfgvalue = function() { return uci.get('network', 'iptv', 'ipaddr') || leaseIp; };
+		o.description = 'DHCP 已获取地址自动填入，切换「静态（手动）」时直接可用';
 
 		o = s.option(form.Value, 'netmask', '子网掩码');
 		o.datatype = 'netmask';
 		o.depends('_enable', '1');
 		o.depends('proto', 'static');
+		o.cfgvalue = function() { return uci.get('network', 'iptv', 'netmask') || leaseMask; };
 
 		o = s.option(form.Value, 'gateway', '网关');
 		o.datatype = 'ip4addr';
@@ -107,13 +130,25 @@ return view.extend({
 		o.description = '保持关闭，避免 IPTV 链路 DNS 污染本机解析';
 		o.depends('_enable', '1');
 
-		var o2 = s.option(form.DummyValue, '_mcvlan', '组播 VLAN');
+		var o2 = s.option(form.Value, '_mvid', '组播 VLAN');
+		o2.datatype = 'range(1,4094)';
+		o2.placeholder = '4000';
 		o2.depends('_enable', '1');
-		o2.cfgvalue = function() {
-			return uci.get('network', 'pon0_4000')
-				? 'pon0.4000（VLAN 4000，组播预留，已配置）'
-				: '未配置（network 中无 pon0_4000 设备段）';
+		o2.description = '组播预留 VLAN（北京联通 4000），在 pon0 上创建 8021q 子设备；留空并保存则删除';
+		o2.cfgvalue = function() { return uci.get('network', 'pon0_4000', 'vid'); };
+		o2.write = function(sectionId, value) {
+			if (!value) {
+				uci.remove('network', 'pon0_4000');
+				return;
+			}
+			if (!uci.get('network', 'pon0_4000'))
+				uci.add('network', 'device', 'pon0_4000');
+			uci.set('network', 'pon0_4000', 'type', '8021q');
+			uci.set('network', 'pon0_4000', 'name', 'pon0.' + value);
+			uci.set('network', 'pon0_4000', 'ifname', 'pon0');
+			uci.set('network', 'pon0_4000', 'vid', value);
 		};
+		o2.remove = function() {};
 
 		/* ---- 机顶盒端口绑定 ---- */
 		function findBrIptv() {
@@ -221,7 +256,26 @@ return view.extend({
 		return m.render().then(function(mapNode) {
 			self.refreshStatus();
 			return tabs.render([
-				{ name: '配置', content: E('div', {}, [mapNode, self.mcBox]) },
+				{ name: '配置', content: E('div', {}, [
+					mapNode,
+					self.mcBox,
+					E('div', { 'class': 'cbi-section' }, [
+						E('h3', {}, '操作'),
+						E('div', { 'class': 'cbi-page-actions' }, [
+							E('button', {
+								'class': 'cbi-button cbi-button-save',
+								'click': ui.createHandlerFn(self, 'saveAndReload')
+							}, '保存并应用'),
+							' ',
+							E('button', {
+								'class': 'cbi-button',
+								'click': ui.createHandlerFn(self, 'reloadOnly')
+							}, '仅重载网络配置')
+						]),
+						E('p', { 'class': 'cbi-section-descr' },
+							'「保存并应用」先提交上方表单，再重启 IPTV 接口。')
+					])
+				]) },
 				{
 					name: '调试', content: E('div', {}, [
 						E('div', { 'class': 'cbi-page-actions' }, [
@@ -309,6 +363,28 @@ return view.extend({
 		return fs.exec_direct(cmd[0], cmd.slice(1)).then(function(out) {
 			this.debugLog.textContent = (out || '').trim() || '（无输出）';
 		}.bind(this));
+	},
+
+	saveAndReload: function() {
+		var map = document.querySelector('.cbi-map');
+		var self = this;
+		return dom.callClassMethod(map, 'save')
+			.then(function() { return L.resolveDefault(fs.exec_direct('/sbin/ifdown', ['iptv']), ''); })
+			.then(function() { return L.resolveDefault(fs.exec_direct('/sbin/ifup', ['iptv']), ''); })
+			.then(function() {
+				ui.addNotification(null, E('p', {}, '已保存并重启 IPTV 接口。'), 'info');
+				setTimeout(function() { self.refreshStatus(); }, 8000);
+			})
+			.catch(function(err) {
+				ui.addNotification(null, E('p', {}, '操作失败：%s'.format(err.message)), 'danger');
+			});
+	},
+
+	reloadOnly: function() {
+		return L.resolveDefault(fs.exec_direct('/sbin/ubus', ['call', 'network', 'reload']), '')
+			.then(function() {
+				ui.addNotification(null, E('p', {}, '网络配置已重载。'), 'info');
+			});
 	},
 
 	handleSaveApply: null,

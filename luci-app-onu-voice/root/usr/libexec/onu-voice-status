@@ -30,6 +30,10 @@ if [ "$reg_ok" = "0" ] && [ "$baresip_running" = "1" ] && [ "$voip_up" = "1" ]; 
 fi
 voip_ip=$(ip -4 addr show dev pon0.3010 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
 
+# 注册号码（状态页「已注册」旁展示）：优先 UCI 账号，兜底 baresip accounts
+reg_phone=$(uci -q get onu.ims.phone 2>/dev/null)
+[ -z "$reg_phone" ] && reg_phone=$(grep -oE '<sip:[^>;@]+' /etc/baresip/accounts 2>/dev/null | head -1 | sed 's/<sip://')
+
 printf '{'
 printf '"slic_bound":"%s",' "$slic_bound"
 printf '"slic_msg":"%s",' "$slic_msg"
@@ -38,6 +42,7 @@ printf '"pcm_irq":"%s",' "$pcm_irq"
 printf '"voice_dev":"%s",' "$voice_dev"
 printf '"baresip_running":"%s",' "$baresip_running"
 printf '"reg_ok":"%s",' "$reg_ok"
+printf '"reg_phone":"%s",' "$reg_phone"
 printf '"reg_lines":"%s",' "$reg_lines"
 printf '"voip_up":"%s",' "$voip_up"
 printf '"voip_ip":"%s"' "$voip_ip"

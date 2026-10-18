@@ -68,20 +68,22 @@ return view.extend({
 		o.description = '语音链路不应作为默认网关（保持关闭）';
 		o.depends('_enable', '1');
 
-		var r = m.section(form.NamedSection, 'ims_route', 'route', 'IMS 静态路由');
-		r.addremove = false;
+		/* ---- IMS 静态路由（独立 Map，渲染在账号参数之后，整体受主开关控制） ---- */
+		var r = new form.Map('network', 'IMS 静态路由',
+			'IMS 语音代理网段经 voip 接口的静态路由（北京联通：10.203.255.0/24，网关 10.143.218.1）。');
+		r.readonly = !L.hasViewPermission();
 
-		o = r.option(form.Value, 'target', '目标网段');
+		var rs = r.section(form.NamedSection, 'ims_route', 'route', 'IMS 静态路由');
+		rs.addremove = false;
+
+		o = rs.option(form.Value, 'target', '目标网段');
 		o.datatype = 'ip4addr';
-		o.depends('_enable', '1');
 
-		o = r.option(form.Value, 'netmask', '子网掩码');
+		o = rs.option(form.Value, 'netmask', '子网掩码');
 		o.datatype = 'netmask';
-		o.depends('_enable', '1');
 
-		o = r.option(form.Value, 'gateway', '网关');
+		o = rs.option(form.Value, 'gateway', '网关');
 		o.datatype = 'ip4addr';
-		o.depends('_enable', '1');
 
 		/* ---- SIP 账号 ---- */
 		var a = new form.Map('onu', 'IMS 账号（SIP 注册）',
@@ -147,23 +149,35 @@ return view.extend({
 
 		return m.render().then(function(mapNode) {
 			return a.render().then(function(imsNode) {
-				this.refreshStatus();
-				return tabs.render([
-					{
-						name: '配置', content: E('div', {}, [
-							mapNode,
-							imsNode,
-							E('div', { 'class': 'cbi-page-actions' }, [
-								E('button', {
-									'class': 'cbi-button cbi-button-save',
-									'click': ui.createHandlerFn(this, 'handleSaveAndApply')
-								}, '保存并应用 SIP')
+				return r.render().then(function(routeNode) {
+					this.refreshStatus();
+					/* 主开关折叠：账号参数与静态路由在另外的 Map，depends 跨 Map 无效，手动隐藏 */
+					var enInput = mapNode.querySelector('[data-field$="._enable"] input[type="checkbox"]');
+					var applyVis = function() {
+						var on = enInput ? enInput.checked : true;
+						imsNode.style.display = on ? '' : 'none';
+						routeNode.style.display = on ? '' : 'none';
+					};
+					if (enInput) enInput.addEventListener('change', applyVis);
+					applyVis();
+					return tabs.render([
+						{
+							name: '配置', content: E('div', {}, [
+								mapNode,
+								imsNode,
+								routeNode,
+								E('div', { 'class': 'cbi-page-actions' }, [
+									E('button', {
+										'class': 'cbi-button cbi-button-save',
+										'click': ui.createHandlerFn(this, 'handleSaveAndApply')
+									}, '保存并应用 SIP')
+								])
 							])
-						])
-					},
-					{ name: '调试', content: this.debugBox }
-				]).then(function(node) {
-					return E('div', { 'class': 'cbi-map onu-scope' }, [this.statusBox, this.pingBox, node]);
+						},
+						{ name: '调试', content: this.debugBox }
+					]).then(function(node) {
+						return E('div', { 'class': 'cbi-map onu-scope' }, [this.statusBox, this.pingBox, node]);
+					}.bind(this));
 				}.bind(this));
 			}.bind(this));
 		}.bind(this));
@@ -218,8 +232,10 @@ return view.extend({
 				]),
 				E('tr', { 'class': 'tr' }, [
 					E('td', { 'class': 'td left' }, 'IMS 注册'),
-					E('td', { 'class': 'td left' },
-						badge(st.reg_ok === '1', '已注册', '未注册/未知') )
+					E('td', { 'class': 'td left' }, [
+						badge(st.reg_ok === '1', '已注册', '未注册/未知'),
+						st.reg_ok === '1' && st.reg_phone ? E('span', {}, ['（', E('var', {}, st.reg_phone), '）']) : ''
+					])
 				]),
 				E('tr', { 'class': 'tr' }, [
 					E('td', { 'class': 'td left' }, '语音口 IP'),
