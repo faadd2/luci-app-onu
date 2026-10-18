@@ -33,8 +33,9 @@ return view.extend({
 		return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c',
 			'/etc/init.d/easycwmpd enabled && echo EN_ENABLED || echo EN_DISABLED; ' +
 			'pidof easycwmpd easycwmp 2>/dev/null | tr "\\n" " "; echo; ' +
-			'kill -0 "$(cat ' + CPID + ' 2>/dev/null)" 2>/dev/null && echo RUNNING || echo STOPPED'
-		]), '\n\nSTOPPED');
+			'kill -0 "$(cat ' + CPID + ' 2>/dev/null)" 2>/dev/null && echo RUNNING || echo STOPPED; ' +
+			'command -v easycwmpd >/dev/null 2>&1 && echo CWMP_INSTALLED || echo CWMP_MISSING'
+		]), '\n\nSTOPPED\nCWMP_MISSING');
 	},
 
 	render: function(statusText) {
@@ -42,7 +43,7 @@ return view.extend({
 		var self = this;
 
 		var m = new form.Map('easycwmp', 'ACS 配置',
-			'TR-069（CWMP）是运营商远程管理光猫的通道：光猫周期性向 ACS 上报，ACS 可反向下发或修改配置（北京联通的 PPPoE / IPTV / VoIP 业务参数均通过该通道下发）。客户端为 easycwmp。');
+			'TR-069（CWMP）是运营商远程管理光猫的通道：光猫周期性向 ACS 上报，ACS 可反向下发或修改配置（北京联通的 PPPoE / IPTV / VoIP 业务参数均通过该通道下发）。');
 		m.readonly = !L.hasViewPermission();
 
 		var s = m.section(form.TypedSection, 'local', '本机监听（ConnectionRequest）',
@@ -54,9 +55,11 @@ return view.extend({
 		o = s.option(form.Value, 'interface', '监听接口');
 		o.placeholder = 'wan / voip / 留空全部';
 		o.rmempty = true;
+		o.depends('enable', '1');
 		o = s.option(form.Value, 'port', '监听端口');
 		o.datatype = 'port';
 		o.placeholder = '7547';
+		o.depends('enable', '1');
 
 		var a = m.section(form.TypedSection, 'acs', 'ACS 服务器');
 		a.anonymous = true;
@@ -81,8 +84,22 @@ return view.extend({
 		o.depends('periodic_enable', '1');
 
 		this.statusBox = E('div', { 'class': 'cbi-section' });
-		this.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING');
+		this.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'CWMP_INSTALLED');
 		poll.add(function() { return self.refreshStatus(); }, 5);
+
+		/* ---- 推荐客户端卡片 ---- */
+		this.clientBadge = E('span', { 'class': 'label' }, '检测中…');
+		this.clientCard = E('div', { 'class': 'cbi-section' }, [
+			E('h3', {}, 'ACS 客户端'),
+			E('p', { 'class': 'cbi-section-descr' },
+				'推荐使用 easycwmp：轻量开源 CWMP 客户端，支持 TR-069 周期上报与 ACS 反向连接。安装/重装入口在「调试」页。'),
+			E('table', { 'class': 'table' }, [
+				E('tr', { 'class': 'tr' }, [
+					E('td', { 'class': 'td left', 'style': 'width: 30%' }, E('var', {}, 'easycwmp')),
+					E('td', { 'class': 'td left' }, this.clientBadge)
+				])
+			])
+		]);
 
 		this.debugLog = E('pre', {
 			'style': 'max-height: 18em; overflow: auto; margin: 0.5rem 1rem 1rem; padding: 0.5em; ' +
@@ -92,7 +109,7 @@ return view.extend({
 		var cfgPane = m.render().then(function(mapNode) {
 			return E('div', {}, [
 				mapNode,
-				self.statusBox,
+				self.clientCard,
 				E('div', { 'class': 'cbi-page-actions' }, [
 					E('button', {
 						'class': 'cbi-button cbi-button-save',
@@ -126,6 +143,17 @@ return view.extend({
 							'在 PON 口抓取 CWMP 会话报文。下发配置解析前的原始数据来源；EPON OAM/CTC 通道抓包见「光路诊断」页。')
 					]),
 					E('div', { 'class': 'cbi-section' }, [
+						E('h3', {}, 'ACS 客户端安装'),
+						E('div', { 'class': 'cbi-page-actions' }, [
+							E('button', {
+								'class': 'cbi-button cbi-button-action',
+								'click': ui.createHandlerFn(self, 'installClient')
+							}, '安装 / 重装 easycwmp 客户端')
+						]),
+						E('p', { 'class': 'cbi-section-descr' },
+							'优先从 /root/apks/ 下的离线安装包安装（刷机后需重新放入 easycwmp 与 libmicroxml1 的 apk），否则尝试在线源。')
+					]),
+					E('div', { 'class': 'cbi-section' }, [
 						E('h3', {}, 'easycwmp 日志'),
 						E('div', { 'class': 'cbi-page-actions' }, [
 							E('button', {
@@ -138,11 +166,11 @@ return view.extend({
 				])
 			}
 		]).then(function(node) {
-			return E('div', { 'class': 'cbi-map onu-scope' }, node);
+			return E('div', { 'class': 'cbi-map onu-scope' }, [self.statusBox, node]);
 		});
 	},
 
-	renderStatus: function(enEnabled, pids, capturing) {
+	renderStatus: function(enEnabled, pids, capturing, installed) {
 		var rows = [];
 		function row(k, v) {
 			rows.push(E('tr', { 'class': 'tr' }, [
@@ -159,6 +187,13 @@ return view.extend({
 		row('报文抓取', capturing
 			? E('span', { 'class': 'label label-success' }, '抓取中')
 			: E('span', { 'class': 'label' }, '未启动'));
+		row('ACS 客户端', installed
+			? E('span', { 'class': 'label label-success' }, '已安装')
+			: E('span', { 'class': 'label label-warning' }, '未安装（推荐安装 easycwmp）'));
+		if (this.clientBadge) {
+			this.clientBadge.className = installed ? 'label label-success' : 'label label-warning';
+			this.clientBadge.textContent = installed ? '已安装（推荐）' : '未安装（推荐安装）';
+		}
 		dom.content(this.statusBox, [
 			E('h3', {}, '运行状态'),
 			E('table', { 'class': 'table' }, rows)
@@ -170,11 +205,19 @@ return view.extend({
 		return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c',
 			'/etc/init.d/easycwmpd enabled && echo EN_ENABLED || echo EN_DISABLED; ' +
 			'pidof easycwmpd easycwmp 2>/dev/null | tr "\\n" " "; echo; ' +
-			'kill -0 "$(cat ' + CPID + ' 2>/dev/null)" 2>/dev/null && echo RUNNING || echo STOPPED'
+			'kill -0 "$(cat ' + CPID + ' 2>/dev/null)" 2>/dev/null && echo RUNNING || echo STOPPED; ' +
+			'command -v easycwmpd >/dev/null 2>&1 && echo CWMP_INSTALLED || echo CWMP_MISSING'
 		]), '').then(function(text) {
 			var lines = String(text || '').split('\n');
-			self.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING');
+			self.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'CWMP_INSTALLED');
 		});
+	},
+
+	installClient: function() {
+		return fs.exec_direct('/usr/libexec/onu-acs-install', []).then(function(out) {
+			ui.addNotification(null, E('p', {}, (out || '').trim().split('\n').pop() || '执行完成'), 'info');
+			return this.refreshStatus();
+		}.bind(this));
 	},
 
 	saveAndRestart: function() {

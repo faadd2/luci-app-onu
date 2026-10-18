@@ -21,6 +21,7 @@
 			},
 			"file": {
 				"/etc/init.d/easycwmpd restart": [ "exec" ],
+				"/usr/libexec/onu-acs-install": [ "exec" ],
 				"/bin/sh -c *": [ "exec" ],
 				"/tmp/acs-capture.pid": [ "write" ]
 			}

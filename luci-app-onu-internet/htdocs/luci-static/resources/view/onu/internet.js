@@ -90,7 +90,6 @@ return view.extend({
 				{
 					name: '配置', content: E('div', {}, [
 						mapNode,
-						self.statusBox,
 						E('div', { 'class': 'cbi-section' }, [
 							E('h3', {}, '操作'),
 							E('div', { 'class': 'cbi-page-actions' }, [
@@ -124,7 +123,7 @@ return view.extend({
 					])
 				}
 			]).then(function(node) {
-				return E('div', { 'class': 'cbi-map onu-scope' }, node);
+				return E('div', { 'class': 'cbi-map onu-scope' }, [self.statusBox, node]);
 			});
 		});
 	},

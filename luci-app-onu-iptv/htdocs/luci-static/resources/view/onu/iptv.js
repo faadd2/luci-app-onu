@@ -185,7 +185,7 @@ return view.extend({
 		return m.render().then(function(mapNode) {
 			self.refreshStatus();
 			return tabs.render([
-				{ name: '配置', content: E('div', {}, [mapNode, self.mcBox, self.statusBox]) },
+				{ name: '配置', content: E('div', {}, [mapNode, self.mcBox]) },
 				{
 					name: '调试', content: E('div', {}, [
 						E('div', { 'class': 'cbi-page-actions' }, [
@@ -202,7 +202,9 @@ return view.extend({
 						self.debugLog
 					])
 				}
-			]);
+			]).then(function(node) {
+				return E('div', { 'class': 'cbi-map onu-scope' }, [self.statusBox, node]);
+			});
 		});
 	},
 

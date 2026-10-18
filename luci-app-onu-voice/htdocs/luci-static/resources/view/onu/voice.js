@@ -2,6 +2,7 @@
 'require dom';
 'require form';
 'require fs';
+'require poll';
 'require ui';
 'require uci';
 'require view';
@@ -98,6 +99,7 @@ return view.extend({
 			E('h3', {}, '语音链路状态'),
 			E('div', { 'id': 'onu-voice-status' }, E('p', {}, '加载中…'))
 		]);
+		poll.add(L.bind(this.refreshStatus, this), 5);
 
 		/* ---- IMS 可达性（保留 v1） ---- */
 		this.pingBox = E('div', { 'class': 'cbi-section' }, [
@@ -136,8 +138,6 @@ return view.extend({
 						name: '配置', content: E('div', {}, [
 							mapNode,
 							imsNode,
-							this.statusBox,
-							this.pingBox,
 							E('div', { 'class': 'cbi-page-actions' }, [
 								E('button', {
 									'class': 'cbi-button cbi-button-save',
@@ -148,8 +148,8 @@ return view.extend({
 					},
 					{ name: '调试', content: this.debugBox }
 				]).then(function(node) {
-					return E('div', { 'class': 'cbi-map onu-scope' }, node);
-				});
+					return E('div', { 'class': 'cbi-map onu-scope' }, [this.statusBox, this.pingBox, node]);
+				}.bind(this));
 			}.bind(this));
 		}.bind(this));
 	},
@@ -173,7 +173,7 @@ return view.extend({
 	},
 
 	refreshStatus: function() {
-		var box = document.getElementById('onu-voice-status');
+		var box = this.statusBox;
 		if (!box) return;
 		return fs.exec_direct('/usr/libexec/onu-voice-status', []).then(function(out) {
 			var st = {};
@@ -212,7 +212,7 @@ return view.extend({
 						st.voip_up === '1' ? E('var', {}, st.voip_ip || '-') : E('span', { 'class': 'label label-danger' }, '接口未起'))
 				])
 			];
-			dom.content(box, E('table', { 'class': 'table' }, rows));
+			dom.content(box, [E('h3', {}, '语音链路状态'), E('table', { 'class': 'table' }, rows)]);
 		});
 	},
 
