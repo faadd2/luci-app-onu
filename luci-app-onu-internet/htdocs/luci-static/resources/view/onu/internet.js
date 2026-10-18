@@ -6,6 +6,7 @@
 'require uci';
 'require ui';
 'require view';
+'require view.onu.tabs as tabs';
 
 /* 共享主题样式 onu.css（暗色主题 label 徽标/表格标题行修复）；id 防重复 */
 if (!document.getElementById('onu-shared-css')) {
@@ -39,10 +40,25 @@ return view.extend({
 		var s = m.section(form.NamedSection, 'wan', 'interface', 'WAN 接口');
 		s.addremove = false;
 
+		var en = s.option(form.Flag, '_enable', '启用上网线路');
+		en.cfgvalue = function() {
+			var p = uci.get('network', 'wan', 'proto');
+			return (p && p !== 'none') ? '1' : '0';
+		};
+		en.write = function(sectionId, value) {
+			if (value !== '1') {
+				uci.set('network', 'wan', 'proto', 'none');
+			}
+			else if (!uci.get('network', 'wan', 'proto') || uci.get('network', 'wan', 'proto') === 'none') {
+				uci.set('network', 'wan', 'proto', 'pppoe');
+			}
+		};
+		en.remove = function() {};
+
 		var o = s.option(form.ListValue, 'proto', '上网方式');
 		o.value('pppoe', 'PPPoE 拨号');
 		o.value('dhcp', 'DHCP 客户端');
-		o.value('none', '停用');
+		o.depends('_enable', '1');
 
 		o = s.option(form.Value, '_vlan', '上网 VLAN ID');
 		o.placeholder = '3961';
@@ -52,27 +68,33 @@ return view.extend({
 			uci.set('network', 'wan', 'device', 'pon0.' + value);
 		};
 		o.remove = function() {};
+		o.depends('_enable', '1');
 		o.depends('proto', 'pppoe');
 		o.depends('proto', 'dhcp');
 
 		o = s.option(form.Value, 'username', 'PPPoE 账号');
+		o.depends('_enable', '1');
 		o.depends('proto', 'pppoe');
 
 		o = s.option(form.Value, 'password', 'PPPoE 密码');
 		o.password = true;
+		o.depends('_enable', '1');
 		o.depends('proto', 'pppoe');
 
 		o = s.option(form.Value, 'mtu', 'MTU');
 		o.datatype = 'range(576,1500)';
 		o.placeholder = '1492';
+		o.depends('_enable', '1');
 		o.depends('proto', 'pppoe');
 
 		o = s.option(form.Flag, 'norelease', '断开时不发送 PADT');
 		o.description = '保持会话，缩短掉线后重连时间（建议开启）';
+		o.depends('_enable', '1');
 		o.depends('proto', 'pppoe');
 
 		o = s.option(form.Flag, 'defaultroute', '设为默认网关');
 		o.default = o.enabled;
+		o.depends('_enable', '1');
 
 		var self = this;
 		var statusBox = E('div', { 'class': 'cbi-section' }, [E('h3', {}, '连接状态'), E('p', {}, '加载中…')]);
@@ -81,25 +103,59 @@ return view.extend({
 
 		return m.render().then(function(mapNode) {
 			self.refreshStatus();
-			return E('div', { 'class': 'cbi-map onu-scope' }, [
-				mapNode,
-				statusBox,
-				E('div', { 'class': 'cbi-section' }, [
-					E('h3', {}, '操作'),
-					E('div', { 'class': 'cbi-page-actions' }, [
-						E('button', {
-							'class': 'cbi-button cbi-button-action',
-							'click': ui.createHandlerFn(self, 'reconnect')
-						}, '保存并重新拨号'),
-						E('button', {
-							'class': 'cbi-button',
-							'click': ui.createHandlerFn(self, 'reloadOnly')
-						}, '仅重载网络配置')
-					]),
-					E('p', { 'class': 'cbi-section-descr' }, '「保存并重新拨号」会先提交上方表单，再重启 wan 接口。')
-				])
-			]);
+			self.debugLog = E('pre', {
+				'style': 'max-height: 18em; overflow: auto; margin: 0.5rem 1rem 1rem; padding: 0.5em; ' +
+					'background: rgba(127,127,127,0.08); font-size: 0.8125rem; white-space: pre-wrap;'
+			}, '点击「刷新日志」加载。');
+			return tabs.render([
+				{
+					name: '配置', content: E('div', {}, [
+						mapNode,
+						E('div', { 'class': 'cbi-section' }, [
+							E('h3', {}, '操作'),
+							E('div', { 'class': 'cbi-page-actions' }, [
+								E('button', {
+									'class': 'cbi-button cbi-button-action',
+									'click': ui.createHandlerFn(self, 'reconnect')
+								}, '保存并重新拨号'),
+								E('button', {
+									'class': 'cbi-button',
+									'click': ui.createHandlerFn(self, 'reloadOnly')
+								}, '仅重载网络配置')
+							]),
+							E('p', { 'class': 'cbi-section-descr' }, '「保存并重新拨号」会先提交上方表单，再重启 wan 接口。')
+						])
+					])
+				},
+				{
+					name: '调试', content: E('div', {}, [
+						E('div', { 'class': 'cbi-page-actions' }, [
+							E('button', {
+								'class': 'cbi-button',
+								'click': ui.createHandlerFn(self, 'refreshDebug', 'log')
+							}, '刷新日志（PPPoE/netifd）'),
+							' ',
+							E('button', {
+								'class': 'cbi-button',
+								'click': ui.createHandlerFn(self, 'refreshDebug', 'ifstatus')
+							}, '接口原始状态')
+						]),
+						self.debugLog
+					])
+				}
+			]).then(function(node) {
+				return E('div', { 'class': 'cbi-map onu-scope' }, [self.statusBox, node]);
+			});
 		});
+	},
+
+	refreshDebug: function(kind) {
+		var cmd = kind === 'log'
+			? ['/bin/sh', '-c', '/sbin/logread -e "ppp|netifd" | tail -40']
+			: ['/sbin/ifstatus', 'wan'];
+		return fs.exec_direct(cmd[0], cmd.slice(1)).then(function(out) {
+			this.debugLog.textContent = (out || '').trim() || '（无输出）';
+		}.bind(this));
 	},
 
 	refreshStatus: function() {

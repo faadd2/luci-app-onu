@@ -1,0 +1,49 @@
+#!/bin/sh
+# onu-voice-status — 语音链路状态采集（LuCI file exec 调用，输出 JSON）
+. /lib/functions.sh
+
+json_add_str() { printf '"%s":"%s",' "$1" "$2"; }
+
+# 1) SLIC/驱动状态
+slic_bound=0
+[ -e /sys/bus/platform/devices/1fbd1000.zsi:slic@0/driver ] && slic_bound=1
+slic_msg=$(dmesg | grep -E "Le964|chip id|bring-up failed" | tail -1)
+mods=$(lsmod | grep -cE "en75xx_(lec|pcm|zsi|slic|voice)")
+pcm_irq=$(grep -c "1fbd0000.pcm" /proc/interrupts)
+voice_dev=$(ls /dev/ | grep -ci voice)
+
+# 3) 注册状态：无 syslog 模块（模块目录无 syslog.so），logread 无 baresip 记录。
+#    采用推断法：baresip 存活 + voip 接口有地址 = 注册保持（baresip 启动即注册并按 regint 刷新；
+#    北京联通 SBC 对失败注册会 403，进程能稳定存活且接口在线即视为已注册）。
+bpid=$(pidof baresip 2>/dev/null)
+baresip_running=0
+[ -n "$bpid" ] && baresip_running=1
+
+voip_up=$(ifstatus voip 2>/dev/null | grep -c '"up": true')
+reg_lines=$(logread 2>/dev/null | grep -iE "baresip.*(regist|200 OK|expiry)" | tail -3 | tr '"' "'" | tr '\n' '|')
+reg_ok=0
+echo "$reg_lines" | grep -qiE "200 OK|registered|expiry" && reg_ok=1
+# 推断兜底：syslog 无记录时以 进程+接口 推断
+if [ "$reg_ok" = "0" ] && [ "$baresip_running" = "1" ] && [ "$voip_up" = "1" ]; then
+	reg_ok=1
+	echo "$reg_lines" | grep -q "推断" || reg_lines="${reg_lines}进程+接口推断已注册|"
+fi
+voip_ip=$(ip -4 addr show dev pon0.3010 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
+
+# 注册号码（状态页「已注册」旁展示）：优先 UCI 账号，兜底 baresip accounts
+reg_phone=$(uci -q get onu.ims.phone 2>/dev/null)
+[ -z "$reg_phone" ] && reg_phone=$(grep -oE '<sip:[^>;@]+' /etc/baresip/accounts 2>/dev/null | head -1 | sed 's/<sip://')
+
+printf '{'
+printf '"slic_bound":"%s",' "$slic_bound"
+printf '"slic_msg":"%s",' "$slic_msg"
+printf '"voice_mods":"%s",' "$mods"
+printf '"pcm_irq":"%s",' "$pcm_irq"
+printf '"voice_dev":"%s",' "$voice_dev"
+printf '"baresip_running":"%s",' "$baresip_running"
+printf '"reg_ok":"%s",' "$reg_ok"
+printf '"reg_phone":"%s",' "$reg_phone"
+printf '"reg_lines":"%s",' "$reg_lines"
+printf '"voip_up":"%s",' "$voip_up"
+printf '"voip_ip":"%s"' "$voip_ip"
+printf '}\n'

@@ -12,19 +12,27 @@
 				]
 			},
 			"file": {
-				"/sbin/ifstatus voip": [
-					"exec"
-				],
-				"/bin/ping -c *": [
-					"exec"
-				]
+				"/sbin/ifstatus voip": [ "exec" ],
+				"/bin/ping -c *": [ "exec" ],
+				"/usr/libexec/onu-voice-status": [ "exec" ],
+				"/sbin/logread -e *": [ "exec" ],
+				"/bin/dmesg": [ "exec" ]
 			}
 		},
 		"write": {
 			"uci": [
 				"network",
 				"onu"
-			]
+			],
+			"ubus": {
+				"file": [
+					"exec"
+				]
+			},
+			"file": {
+				"/usr/libexec/onu-voice-apply": [ "exec" ],
+				"/etc/init.d/baresip *": [ "exec" ]
+			}
 		}
 	}
 }

@@ -2,20 +2,29 @@
 	"luci-app-onu-mgmt": {
 		"description": "Grant access to ONU ACS (TR-069) management",
 		"read": {
-			"uci": [ "acs", "network" ],
+			"uci": [ "easycwmp", "acs", "network" ],
+			"ubus": {
+				"file": [ "exec", "read" ]
+			},
 			"file": {
+				"/etc/init.d/easycwmpd enabled": [ "exec" ],
+				"/sbin/logread -e *": [ "exec" ],
 				"/tmp/acs-capture.log": [ "read" ],
 				"/tmp/acs-capture.pid": [ "read" ],
 				"/tmp/acs-capture.pcap": [ "read" ]
-			},
-			"exec": [ "/bin/sh", "/usr/bin/tcpdump" ]
+			}
 		},
 		"write": {
-			"uci": [ "acs" ],
-			"file": {
-				"/tmp/acs-capture.pid": [ "write" ]
+			"uci": [ "easycwmp", "acs" ],
+			"ubus": {
+				"file": [ "exec", "write" ]
 			},
-			"exec": [ "/bin/sh", "/bin/kill", "/usr/bin/tcpdump" ]
+			"file": {
+				"/etc/init.d/easycwmpd restart": [ "exec" ],
+				"/usr/libexec/onu-acs-install": [ "exec" ],
+				"/bin/sh -c *": [ "exec" ],
+				"/tmp/acs-capture.pid": [ "write" ]
+			}
 		}
 	}
 }

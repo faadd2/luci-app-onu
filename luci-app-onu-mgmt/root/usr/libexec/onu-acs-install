@@ -1,0 +1,24 @@
+#!/bin/sh
+# ONU ACS 客户端安装/重装（easycwmp + libmicroxml1）
+# 优先 /root/apks/ 离线包；否则尝试在线源。输出末行为结果摘要（LuCI 弹窗读取）。
+set -u
+
+echo "== 检查已安装状态 =="
+apk list --installed 2>/dev/null | grep -E "^(easycwmp|libmicroxml1)-" || echo "（当前未安装）"
+
+if ls /root/apks/easycwmp*.apk /root/apks/libmicroxml1*.apk >/dev/null 2>&1; then
+	echo "== 使用 /root/apks/ 离线安装包 =="
+	apk add --allow-untrusted --no-scripts /root/apks/easycwmp*.apk /root/apks/libmicroxml1*.apk && \
+		{ echo "RESULT: 离线安装成功"; exit 0; }
+	echo "RESULT: 离线安装失败（见上方日志）"
+	exit 1
+fi
+
+echo "== 尝试在线源 =="
+if apk add easycwmp libmicroxml1 2>&1; then
+	echo "RESULT: 在线安装成功"
+	exit 0
+fi
+
+echo "RESULT: 安装失败：在线源无 easycwmp，请将 easycwmp 与 libmicroxml1 的 apk 放入 /root/apks/ 后重试"
+exit 1
