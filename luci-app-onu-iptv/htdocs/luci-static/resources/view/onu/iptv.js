@@ -51,6 +51,11 @@ return view.extend({
 		try { lease = JSON.parse(ifText) || {}; } catch (e) {}
 		var leaseIp = ((lease['ipv4-address'] || [])[0] || {}).address || '';
 		var leaseMask = prefixToMask(((lease['ipv4-address'] || [])[0] || {}).mask);
+		/* 运营商下发的默认网关/DNS 因 defaultroute/peerdns=0 落在 inactive 段，仍取来回填 */
+		var leaseGw = '';
+		(((lease.inactive || {}).route) || []).forEach(function(rt) {
+			if (!leaseGw && rt.nexthop) leaseGw = rt.nexthop;
+		});
 
 		var mc = { omcproxy: false, igmpproxy: false };
 		String(pkgText || '').split('\n').forEach(function(l) {
@@ -102,6 +107,7 @@ return view.extend({
 		o.datatype = 'ip4addr';
 		o.depends('_enable', '1');
 		o.depends('proto', 'static');
+		o.cfgvalue = function() { return uci.get('network', 'iptv', 'gateway') || leaseGw; };
 
 		o = s.option(form.Value, '_vlan', 'IPTV VLAN ID');
 		o.datatype = 'range(1,4094)';
