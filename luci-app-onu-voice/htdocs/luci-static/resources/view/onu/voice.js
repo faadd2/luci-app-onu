@@ -5,6 +5,7 @@
 'require ui';
 'require uci';
 'require view';
+'require view.onu.tabs';
 
 /* 共享主题样式 onu.css（暗色主题 label 徽标/表格标题行修复）；id 防重复 */
 if (!document.getElementById('onu-shared-css')) {
@@ -129,23 +130,26 @@ return view.extend({
 
 		return m.render().then(function(mapNode) {
 			return a.render().then(function(imsNode) {
-				return E('div', { 'class': 'cbi-map onu-scope' }, [
-					mapNode,
-					this.statusBox,
-					this.pingBox,
-					imsNode,
-					E('div', { 'class': 'cbi-page-actions' }, [
-						E('button', {
-							'class': 'cbi-button cbi-button-save',
-							'click': ui.createHandlerFn(this, 'handleSaveAndApply')
-						}, '保存并应用 SIP')
-					]),
-					this.debugBox
-				]);
+				this.refreshStatus();
+				return new tabs([
+					{
+						name: '配置', content: E('div', {}, [
+							mapNode,
+							imsNode,
+							E('div', { 'class': 'cbi-page-actions' }, [
+								E('button', {
+									'class': 'cbi-button cbi-button-save',
+									'click': ui.createHandlerFn(this, 'handleSaveAndApply')
+								}, '保存并应用 SIP')
+							])
+						])
+					},
+					{ name: '状态', content: E('div', {}, [this.statusBox, this.pingBox]) },
+					{ name: '调试', content: this.debugBox }
+				]).render().then(function(node) {
+					return E('div', { 'class': 'cbi-map onu-scope' }, node);
+				});
 			}.bind(this));
-		}.bind(this)).then(function(node) {
-			this.refreshStatus();
-			return node;
 		}.bind(this));
 	},
 

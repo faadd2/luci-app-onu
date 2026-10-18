@@ -3,7 +3,9 @@
 'require form';
 'require fs';
 'require uci';
+'require ui';
 'require view';
+'require view.onu.tabs';
 
 /* 共享主题样式 onu.css（暗色主题 label 徽标/表格标题行修复）；id 防重复 */
 if (!document.getElementById('onu-shared-css')) {
@@ -15,14 +17,29 @@ if (!document.getElementById('onu-shared-css')) {
 }
 
 function parseVid(device) {
-	var m = /^(pon0)\.(\d{1,4})$/.exec(device || '');
+	var m = /^(?:pon0)\.(\d{1,4})$/.exec(device || '');
 	return m ? m[2] : '';
 }
 
 return view.extend({
-	render: function() {
+	load: function() {
+		return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c',
+			'apk list --installed 2>/dev/null | grep -E "^(omcproxy|igmpproxy)-" ; echo ---; ' +
+			'/etc/init.d/omcproxy enabled 2>/dev/null && echo OMCP_EN || echo OMCP_DIS; ' +
+			'pidof omcproxy igmpproxy 2>/dev/null | tr "\\n" " "'
+		]), '');
+	},
+
+	render: function(pkgText) {
+		var self = this;
+		var mc = { omcproxy: false, igmpproxy: false };
+		String(pkgText || '').split('\n').forEach(function(l) {
+			if (/^omcproxy-/.test(l)) mc.omcproxy = true;
+			if (/^igmpproxy-/.test(l)) mc.igmpproxy = true;
+		});
+
 		var m = new form.Map('network', 'IPTV 设置',
-			'IPTV 数据链路（北京联通 VLAN 3964）与组播预留（VLAN 4000）。机顶盒未接时保持链路在线即可。');
+			'IPTV 数据链路（北京联通 VLAN 3964）、组播代理与机顶盒端口绑定。机顶盒未接时保持链路在线即可。');
 		m.readonly = !L.hasViewPermission();
 
 		var s = m.section(form.NamedSection, 'iptv', 'interface', 'IPTV 接口');
@@ -37,7 +54,16 @@ return view.extend({
 		o.placeholder = '3964';
 		o.cfgvalue = function() { return parseVid(uci.get('network', 'iptv', 'device')); };
 		o.write = function(sectionId, value) {
+			var dev = uci.get('network', 'iptv', 'device');
 			uci.set('network', 'iptv', 'device', 'pon0.' + value);
+			/* 若已绑定机顶盒端口，同步更新 br-iptv 的 uplink 口 */
+			var b = findBrIptv();
+			if (b) {
+				var lan = (uci.get('network', b, 'ports') || []).filter(function(p) {
+					return !/^pon0\./.test(p);
+				})[0];
+				if (lan) uci.set('network', b, 'ports', [lan, 'pon0.' + value]);
+			}
 		};
 		o.remove = function() {};
 
@@ -49,26 +75,171 @@ return view.extend({
 
 		var o2 = s.option(form.DummyValue, '_mcvlan', '组播 VLAN');
 		o2.cfgvalue = function() {
-			var dev = uci.get('network', 'pon0_4000');
-			return dev ? 'pon0.4000（VLAN 4000，组播预留，已配置）' : '未配置（network 中无 pon0_4000 设备段）';
+			return uci.get('network', 'pon0_4000')
+				? 'pon0.4000（VLAN 4000，组播预留，已配置）'
+				: '未配置（network 中无 pon0_4000 设备段）';
 		};
+
+		/* ---- 机顶盒端口绑定 ---- */
+		function findBrIptv() {
+			var id = null;
+			uci.sections('network', 'device', function(sec) {
+				if (sec.name === 'br-iptv') id = sec['.name'];
+			});
+			return id;
+		}
+
+		o = s.option(form.ListValue, '_bindport', '机顶盒端口绑定',
+			'把某个 LAN 口桥接到 IPTV 链路：该口下的机顶盒将直接从运营商 IPTV 网络获取地址（与路由模式二选一）。');
+		o.value('', '不绑定（路由模式）');
+		['lan1', 'lan2', 'lan3', 'lan4'].forEach(function(p) { o.value(p, p); });
+		o.cfgvalue = function() {
+			var b = findBrIptv();
+			if (!b) return '';
+			var lan = (uci.get('network', b, 'ports') || []).filter(function(p) {
+				return !/^pon0\./.test(p);
+			})[0];
+			return lan || '';
+		};
+		o.write = function(sectionId, value) {
+			var b = findBrIptv();
+			var oldLan = b ? (uci.get('network', b, 'ports') || []).filter(function(p) {
+				return !/^pon0\./.test(p);
+			})[0] : null;
+			var vid = parseVid(uci.get('network', 'iptv', 'device')) || '3964';
+			var brlan = uci.get('network', '@device[0]') ? null : null;
+
+			if (!value) {
+				if (b) uci.remove('network', b);
+				uci.set('network', 'iptv', 'device', 'pon0.' + vid);
+				if (oldLan) addPortToBrLan(oldLan);
+				return;
+			}
+			if (!b) b = uci.add('network', 'device');
+			uci.set('network', b, 'name', 'br-iptv');
+			uci.set('network', b, 'type', 'bridge');
+			uci.set('network', b, 'ports', [value, 'pon0.' + vid]);
+			uci.set('network', 'iptv', 'device', 'br-iptv');
+			if (oldLan && oldLan !== value) addPortToBrLan(oldLan);
+			removePortFromBrLan(value);
+		};
+		o.remove = function() {};
+
+		function findBrLan() {
+			var id = null;
+			uci.sections('network', 'device', function(sec) {
+				if (sec.name === 'br-lan') id = sec['.name'];
+			});
+			return id;
+		}
+		function removePortFromBrLan(port) {
+			var b = findBrLan();
+			if (!b) return;
+			var ports = (uci.get('network', b, 'ports') || []).filter(function(p) { return p !== port; });
+			uci.set('network', b, 'ports', ports);
+		}
+		function addPortToBrLan(port) {
+			var b = findBrLan();
+			if (!b) return;
+			var ports = uci.get('network', b, 'ports') || [];
+			if (ports.indexOf(port) < 0) uci.set('network', b, 'ports', ports.concat([port]));
+		}
+
+		/* ---- 组播代理 ---- */
+		this.mcStatus = E('div', { 'class': 'cbi-section' });
+		this.renderMcStatus(pkgText);
+
+		this.mcBox = E('div', { 'class': 'cbi-section' }, [
+			E('h3', {}, '组播代理'),
+			E('p', { 'class': 'cbi-section-descr' },
+				'机顶盒直插（端口绑定）模式通常不需要组播代理；路由模式/跨网段观看组播节目时需要。omcproxy 为推荐方案。'),
+			E('div', { 'class': 'cbi-page-actions' }, [
+				E('button', {
+					'class': 'cbi-button cbi-button-action',
+					'disabled': mc.omcproxy ? 'disabled' : null,
+					'click': ui.createHandlerFn(this, 'installMc', 'omcproxy')
+				}, mc.omcproxy ? 'omcproxy 已安装' : '安装 omcproxy'),
+				' ',
+				E('button', {
+					'class': 'cbi-button',
+					'disabled': mc.omcproxy ? null : 'disabled',
+					'click': ui.createHandlerFn(this, 'toggleMc', 'start')
+				}, '启动'),
+				' ',
+				E('button', {
+					'class': 'cbi-button cbi-button-negative',
+					'disabled': mc.omcproxy ? null : 'disabled',
+					'click': ui.createHandlerFn(this, 'toggleMc', 'stop')
+				}, '停止')
+			]),
+			this.mcStatus
+		]);
 
 		this.statusBox = E('div', { 'class': 'cbi-section' }, [E('h3', {}, '链路状态'), E('p', {}, '加载中…')]);
 
+		this.debugLog = E('pre', {
+			'style': 'max-height: 18em; overflow: auto; margin: 0.5rem 1rem 1rem; padding: 0.5em; ' +
+				'background: rgba(127,127,127,0.08); font-size: 0.8125rem; white-space: pre-wrap;'
+		}, '点击「刷新日志」加载。');
+
 		return m.render().then(function(mapNode) {
-			this.refreshStatus();
-			return E('div', { 'class': 'cbi-map onu-scope' }, [
-				mapNode,
-				this.statusBox,
-				E('div', { 'class': 'cbi-section' }, [
-					E('h3', {}, '说明'),
-					E('p', { 'class': 'cbi-section-descr' }, [
-						'本页只管理数据链路。组播代理（omcproxy/igmpproxy）与组播转单播（udpxy 等）',
-						'需要安装对应软件包，当前固件未预装。机顶盒接 LAN 口后如需 IGMP 代理再另行配置。'
+			self.refreshStatus();
+			return new tabs([
+				{ name: '配置', content: E('div', {}, [mapNode, self.mcBox]) },
+				{ name: '状态', content: self.statusBox },
+				{
+					name: '调试', content: E('div', {}, [
+						E('div', { 'class': 'cbi-page-actions' }, [
+							E('button', {
+								'class': 'cbi-button',
+								'click': ui.createHandlerFn(self, 'refreshDebug', 'log')
+							}, '刷新日志（network/omcproxy/igmpproxy）'),
+							' ',
+							E('button', {
+								'class': 'cbi-button',
+								'click': ui.createHandlerFn(self, 'refreshDebug', 'ifstatus')
+							}, '接口原始状态')
+						]),
+						self.debugLog
 					])
-				])
-			]);
-		}.bind(this));
+				}
+			]).render();
+		});
+	},
+
+	renderMcStatus: function(pkgText) {
+		var text = String(pkgText || '');
+		var lines = text.split('\n');
+		var pids = '';
+		for (var i = 0; i < lines.length; i++)
+			if (lines[i].indexOf('OMCP_') === 0) { pids = (lines[i + 1] || '').trim(); break; }
+		var rows = [];
+		['omcproxy', 'igmpproxy'].forEach(function(name) {
+			var installed = new RegExp('^' + name + '-', 'm').test(text);
+			rows.push(E('tr', { 'class': 'tr' }, [
+				E('td', { 'class': 'td left' }, name),
+				E('td', { 'class': 'td left' }, installed
+					? E('span', { 'class': 'label label-success' }, '已安装')
+					: E('span', { 'class': 'label' }, '未安装')),
+				E('td', { 'class': 'td left' }, pids.indexOf(name) >= 0
+					? E('span', { 'class': 'label label-success' }, '运行中')
+					: E('span', { 'class': 'label' }, '未运行'))
+			]));
+		});
+		dom.content(this.mcStatus, E('table', { 'class': 'table' }, rows));
+	},
+
+	installMc: function(name) {
+		return fs.exec_direct('/sbin/apk', ['add', name]).then(function(out) {
+			ui.addNotification(null, E('p', {}, '%s 安装结果：%s'.format(name, (out || '').trim().slice(-200))), 'info');
+			location.reload();
+		});
+	},
+
+	toggleMc: function(action) {
+		return fs.exec_direct('/etc/init.d/omcproxy', [action]).then(function() {
+			ui.addNotification(null, E('p', {}, 'omcproxy 已%s。'.format(action === 'start' ? '启动' : '停止')), 'info');
+		});
 	},
 
 	refreshStatus: function() {
@@ -86,8 +257,21 @@ return view.extend({
 				: E('span', { 'class': 'label label-warning' }, '离线'));
 			row('IPv4 地址', (st['ipv4-address'] || []).map(function(a) { return a.address; }).join(', ') || '-');
 			row('运行时间', st.uptime != null ? '%d 秒'.format(st.uptime) : '-');
+			var bound = (uci.get('network', 'iptv', 'device') === 'br-iptv');
+			row('机顶盒绑定', bound
+				? E('span', { 'class': 'label label-info' }, '桥接模式（br-iptv）')
+				: E('span', { 'class': 'label' }, '路由模式'));
 			dom.content(box, [E('h3', {}, '链路状态'), E('table', { 'class': 'table' }, rows)]);
 		});
+	},
+
+	refreshDebug: function(kind) {
+		var cmd = kind === 'log'
+			? ['/bin/sh', '-c', '/sbin/logread -e "netifd|omcproxy|igmpproxy" | tail -40']
+			: ['/sbin/ifstatus', 'iptv'];
+		return fs.exec_direct(cmd[0], cmd.slice(1)).then(function(out) {
+			this.debugLog.textContent = (out || '').trim() || '（无输出）';
+		}.bind(this));
 	},
 
 	handleSaveApply: null,

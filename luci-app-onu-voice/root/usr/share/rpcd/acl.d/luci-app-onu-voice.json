@@ -24,6 +24,11 @@
 				"network",
 				"onu"
 			],
+			"ubus": {
+				"file": [
+					"exec"
+				]
+			},
 			"file": {
 				"/usr/libexec/onu-voice-apply": [ "exec" ],
 				"/etc/init.d/baresip *": [ "exec" ]

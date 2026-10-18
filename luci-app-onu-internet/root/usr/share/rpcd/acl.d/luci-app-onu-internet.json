@@ -25,6 +25,12 @@
 				],
 				"/sbin/ubus call network reload": [
 					"exec"
+				],
+				"/sbin/logread -e *": [
+					"exec"
+				],
+				"/bin/sh -c *": [
+					"exec"
 				]
 			}
 		},

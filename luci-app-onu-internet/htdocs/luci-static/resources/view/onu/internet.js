@@ -6,6 +6,7 @@
 'require uci';
 'require ui';
 'require view';
+'require view.onu.tabs';
 
 /* 共享主题样式 onu.css（暗色主题 label 徽标/表格标题行修复）；id 防重复 */
 if (!document.getElementById('onu-shared-css')) {
@@ -81,25 +82,60 @@ return view.extend({
 
 		return m.render().then(function(mapNode) {
 			self.refreshStatus();
-			return E('div', { 'class': 'cbi-map onu-scope' }, [
-				mapNode,
-				statusBox,
-				E('div', { 'class': 'cbi-section' }, [
-					E('h3', {}, '操作'),
-					E('div', { 'class': 'cbi-page-actions' }, [
-						E('button', {
-							'class': 'cbi-button cbi-button-action',
-							'click': ui.createHandlerFn(self, 'reconnect')
-						}, '保存并重新拨号'),
-						E('button', {
-							'class': 'cbi-button',
-							'click': ui.createHandlerFn(self, 'reloadOnly')
-						}, '仅重载网络配置')
-					]),
-					E('p', { 'class': 'cbi-section-descr' }, '「保存并重新拨号」会先提交上方表单，再重启 wan 接口。')
-				])
-			]);
+			self.debugLog = E('pre', {
+				'style': 'max-height: 18em; overflow: auto; margin: 0.5rem 1rem 1rem; padding: 0.5em; ' +
+					'background: rgba(127,127,127,0.08); font-size: 0.8125rem; white-space: pre-wrap;'
+			}, '点击「刷新日志」加载。');
+			return new tabs([
+				{
+					name: '配置', content: E('div', {}, [
+						mapNode,
+						E('div', { 'class': 'cbi-section' }, [
+							E('h3', {}, '操作'),
+							E('div', { 'class': 'cbi-page-actions' }, [
+								E('button', {
+									'class': 'cbi-button cbi-button-action',
+									'click': ui.createHandlerFn(self, 'reconnect')
+								}, '保存并重新拨号'),
+								E('button', {
+									'class': 'cbi-button',
+									'click': ui.createHandlerFn(self, 'reloadOnly')
+								}, '仅重载网络配置')
+							]),
+							E('p', { 'class': 'cbi-section-descr' }, '「保存并重新拨号」会先提交上方表单，再重启 wan 接口。')
+						])
+					])
+				},
+				{ name: '状态', content: self.statusBox },
+				{
+					name: '调试', content: E('div', {}, [
+						E('div', { 'class': 'cbi-page-actions' }, [
+							E('button', {
+								'class': 'cbi-button',
+								'click': ui.createHandlerFn(self, 'refreshDebug', 'log')
+							}, '刷新日志（PPPoE/netifd）'),
+							' ',
+							E('button', {
+								'class': 'cbi-button',
+								'click': ui.createHandlerFn(self, 'refreshDebug', 'ifstatus')
+							}, '接口原始状态')
+						]),
+						self.debugLog
+					])
+				}
+			]).render().then(function(node) {
+				return E('div', { 'class': 'cbi-map onu-scope' }, node);
+			});
 		});
+	},
+
+	refreshDebug: function(kind) {
+		var cmd = kind === 'log'
+			? ['/bin/sh', '-c', '/sbin/logread -e "ppp|netifd" | tail -40']
+			: ['/sbin/ifstatus', 'wan'];
+		return fs.exec_direct(cmd[0], cmd.slice(1)).then(function(out) {
+			this.debugLog.textContent = (out || '').trim() || '（无输出）';
+		}.bind(this));
 	},
 
 	refreshStatus: function() {

@@ -16,13 +16,38 @@
 				],
 				"/bin/ping -c *": [
 					"exec"
+				],
+				"/sbin/apk list --installed": [
+					"exec"
+				],
+				"/etc/init.d/omcproxy enabled": [
+					"exec"
+				],
+				"/bin/sh -c *": [
+					"exec"
 				]
 			}
 		},
 		"write": {
 			"uci": [
 				"network"
-			]
+			],
+			"ubus": {
+				"file": [
+					"exec"
+				]
+			},
+			"file": {
+				"/sbin/apk add omcproxy": [
+					"exec"
+				],
+				"/etc/init.d/omcproxy start": [
+					"exec"
+				],
+				"/etc/init.d/omcproxy stop": [
+					"exec"
+				]
+			}
 		}
 	}
 }
