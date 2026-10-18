@@ -1,7 +1,7 @@
 'use strict';
 /*
  * ONU 连接管理页通用分页组件（仿 LuCI 系统/状态页 tabs）
- * 用法：require view.onu.tabs
+ * 用法：'require view.onu.tabs as tabs';（LuCI 不带 as 时默认变量名是全路径转下划线 view_onu_tabs）
  *   var t = new tabs([{name:'配置', content: nodeOrPromise}, ...]);
  *   return t.render(); // -> Element
  * content 可为 DOM 节点或 Promise（render 后 resolve 成节点）
