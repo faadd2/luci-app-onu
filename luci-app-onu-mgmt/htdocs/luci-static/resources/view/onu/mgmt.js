@@ -34,8 +34,9 @@ return view.extend({
 			'/etc/init.d/easycwmpd enabled && echo EN_ENABLED || echo EN_DISABLED; ' +
 			'pidof easycwmpd easycwmp 2>/dev/null | tr "\\n" " "; echo; ' +
 			'kill -0 "$(cat ' + CPID + ' 2>/dev/null)" 2>/dev/null && echo RUNNING || echo STOPPED; ' +
-			'command -v easycwmpd >/dev/null 2>&1 && echo CWMP_INSTALLED || echo CWMP_MISSING'
-		]), '\n\nSTOPPED\nCWMP_MISSING');
+			'command -v easycwmpd >/dev/null 2>&1 && echo CWMP_INSTALLED || echo CWMP_MISSING; ' +
+			'[ "$(uci -q get easycwmp.@local[0].enable_acs)" = "0" ] && echo ACS_OFF || echo ACS_ON'
+		]), '\n\nSTOPPED\nCWMP_MISSING\nACS_ON');
 	},
 
 	render: function(statusText) {
@@ -51,15 +52,23 @@ return view.extend({
 		s.anonymous = true;
 		s.addremove = false;
 
-		var o = s.option(form.Flag, 'enable', '启用本机监听');
+		var o = s.option(form.Flag, 'enable_acs', '启用 ACS 客户端',
+			'总开关：关闭后 easycwmpd 服务停用、全部参数隐藏');
+		o.default = '1';
+
+		o = s.option(form.Flag, 'enable', '启用本机监听');
+		o.depends('enable_acs', '1');
+
 		o = s.option(form.Value, 'interface', '监听接口');
 		o.placeholder = 'wan / voip / 留空全部';
 		o.rmempty = true;
 		o.depends('enable', '1');
+		o.depends('enable_acs', '1');
 		o = s.option(form.Value, 'port', '监听端口');
 		o.datatype = 'port';
 		o.placeholder = '7547';
 		o.depends('enable', '1');
+		o.depends('enable_acs', '1');
 
 		var a = m.section(form.TypedSection, 'acs', 'ACS 服务器');
 		a.anonymous = true;
@@ -84,7 +93,7 @@ return view.extend({
 		o.depends('periodic_enable', '1');
 
 		this.statusBox = E('div', { 'class': 'cbi-section' });
-		this.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'CWMP_INSTALLED');
+		this.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'CWMP_INSTALLED', lines[4] !== 'ACS_OFF');
 		poll.add(function() { return self.refreshStatus(); }, 5);
 
 		/* ---- 推荐客户端卡片 ---- */
@@ -107,6 +116,16 @@ return view.extend({
 		}, '点击「刷新日志」加载。');
 
 		var cfgPane = m.render().then(function(mapNode) {
+			/* 总开关折叠：enable_acs 在 local 段，acs 段的选项 depends 无法跨段引用，手动隐藏 */
+			var enInput = mapNode.querySelector('[data-field$=".enable_acs"] input[type="checkbox"]');
+			var urlBox = mapNode.querySelector('[data-field$=".url"]');
+			var acsWrap = urlBox ? urlBox.closest('.cbi-section') : null;
+			var applyAcsVis = function() {
+				if (enInput && acsWrap)
+					acsWrap.style.display = enInput.checked ? '' : 'none';
+			};
+			if (enInput) enInput.addEventListener('change', applyAcsVis);
+			applyAcsVis();
 			return E('div', {}, [
 				mapNode,
 				self.clientCard,
@@ -114,7 +133,7 @@ return view.extend({
 					E('button', {
 						'class': 'cbi-button cbi-button-save',
 						'click': ui.createHandlerFn(self, 'saveAndRestart')
-					}, '保存并重启 ACS 客户端')
+					}, '保存并应用（按总开关启停客户端）')
 				])
 			]);
 		});
@@ -170,7 +189,7 @@ return view.extend({
 		});
 	},
 
-	renderStatus: function(enEnabled, pids, capturing, installed) {
+	renderStatus: function(enEnabled, pids, capturing, installed, acsOn) {
 		var rows = [];
 		function row(k, v) {
 			rows.push(E('tr', { 'class': 'tr' }, [
@@ -178,6 +197,11 @@ return view.extend({
 				E('td', { 'class': 'td left' }, v == null || v === '' ? '-' : v)
 			]));
 		}
+		row('ACS 客户端启用', acsOn != null
+			? (acsOn
+				? E('span', { 'class': 'label label-success' }, '已启用')
+				: E('span', { 'class': 'label label-warning' }, '已停用'))
+			: E('span', { 'class': 'label' }, '未配置'));
 		row('开机自启', enEnabled
 			? E('span', { 'class': 'label label-success' }, '已启用')
 			: E('span', { 'class': 'label label-warning' }, '未启用'));
@@ -206,10 +230,11 @@ return view.extend({
 			'/etc/init.d/easycwmpd enabled && echo EN_ENABLED || echo EN_DISABLED; ' +
 			'pidof easycwmpd easycwmp 2>/dev/null | tr "\\n" " "; echo; ' +
 			'kill -0 "$(cat ' + CPID + ' 2>/dev/null)" 2>/dev/null && echo RUNNING || echo STOPPED; ' +
-			'command -v easycwmpd >/dev/null 2>&1 && echo CWMP_INSTALLED || echo CWMP_MISSING'
+			'command -v easycwmpd >/dev/null 2>&1 && echo CWMP_INSTALLED || echo CWMP_MISSING; ' +
+			'[ "$(uci -q get easycwmp.@local[0].enable_acs)" = "0" ] && echo ACS_OFF || echo ACS_ON'
 		]), '').then(function(text) {
 			var lines = String(text || '').split('\n');
-			self.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'CWMP_INSTALLED');
+			self.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'CWMP_INSTALLED', lines[4] !== 'ACS_OFF');
 		});
 	},
 
@@ -224,11 +249,16 @@ return view.extend({
 		var map = document.querySelector('.cbi-map');
 		return dom.callClassMethod(map, 'save')
 			.then(function() {
-				return fs.exec_direct('/etc/init.d/easycwmpd', ['restart']);
+				return fs.exec_direct('/bin/sh', ['-c',
+					'if [ "$(uci -q get easycwmp.@local[0].enable_acs)" = "0" ]; then ' +
+					'/etc/init.d/easycwmpd disable; /etc/init.d/easycwmpd stop; echo RESULT_DISABLED; ' +
+					'else /etc/init.d/easycwmpd enable; /etc/init.d/easycwmpd restart; echo RESULT_ENABLED; fi']);
 			})
-			.then(function() {
-				ui.addNotification(null, E('p', {}, '已保存并重启 easycwmpd。'), 'info');
-			})
+			.then(function(out) {
+				ui.addNotification(null, E('p', {},
+					/RESULT_ENABLED/.test(out || '') ? '已保存并重启 easycwmpd。' : '已保存，ACS 客户端已停用并取消自启。'), 'info');
+				return this.refreshStatus();
+			}.bind(this))
 			.catch(function(err) {
 				ui.addNotification(null, E('p', {}, '操作失败：%s'.format(err.message)), 'danger');
 			});

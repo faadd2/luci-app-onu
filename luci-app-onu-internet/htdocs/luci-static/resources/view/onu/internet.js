@@ -40,10 +40,25 @@ return view.extend({
 		var s = m.section(form.NamedSection, 'wan', 'interface', 'WAN 接口');
 		s.addremove = false;
 
+		var en = s.option(form.Flag, '_enable', '启用上网线路');
+		en.cfgvalue = function() {
+			var p = uci.get('network', 'wan', 'proto');
+			return (p && p !== 'none') ? '1' : '0';
+		};
+		en.write = function(sectionId, value) {
+			if (value !== '1') {
+				uci.set('network', 'wan', 'proto', 'none');
+			}
+			else if (!uci.get('network', 'wan', 'proto') || uci.get('network', 'wan', 'proto') === 'none') {
+				uci.set('network', 'wan', 'proto', 'pppoe');
+			}
+		};
+		en.remove = function() {};
+
 		var o = s.option(form.ListValue, 'proto', '上网方式');
 		o.value('pppoe', 'PPPoE 拨号');
 		o.value('dhcp', 'DHCP 客户端');
-		o.value('none', '停用');
+		o.depends('_enable', '1');
 
 		o = s.option(form.Value, '_vlan', '上网 VLAN ID');
 		o.placeholder = '3961';
@@ -53,27 +68,33 @@ return view.extend({
 			uci.set('network', 'wan', 'device', 'pon0.' + value);
 		};
 		o.remove = function() {};
+		o.depends('_enable', '1');
 		o.depends('proto', 'pppoe');
 		o.depends('proto', 'dhcp');
 
 		o = s.option(form.Value, 'username', 'PPPoE 账号');
+		o.depends('_enable', '1');
 		o.depends('proto', 'pppoe');
 
 		o = s.option(form.Value, 'password', 'PPPoE 密码');
 		o.password = true;
+		o.depends('_enable', '1');
 		o.depends('proto', 'pppoe');
 
 		o = s.option(form.Value, 'mtu', 'MTU');
 		o.datatype = 'range(576,1500)';
 		o.placeholder = '1492';
+		o.depends('_enable', '1');
 		o.depends('proto', 'pppoe');
 
 		o = s.option(form.Flag, 'norelease', '断开时不发送 PADT');
 		o.description = '保持会话，缩短掉线后重连时间（建议开启）';
+		o.depends('_enable', '1');
 		o.depends('proto', 'pppoe');
 
 		o = s.option(form.Flag, 'defaultroute', '设为默认网关');
 		o.default = o.enabled;
+		o.depends('_enable', '1');
 
 		var self = this;
 		var statusBox = E('div', { 'class': 'cbi-section' }, [E('h3', {}, '连接状态'), E('p', {}, '加载中…')]);

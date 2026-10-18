@@ -12,18 +12,22 @@ mods=$(lsmod | grep -cE "en75xx_(lec|pcm|zsi|slic|voice)")
 pcm_irq=$(grep -c "1fbd0000.pcm" /proc/interrupts)
 voice_dev=$(ls /dev/ | grep -ci voice)
 
-# 2) baresip 进程
+# 3) 注册状态：无 syslog 模块（模块目录无 syslog.so），logread 无 baresip 记录。
+#    采用推断法：baresip 存活 + voip 接口有地址 = 注册保持（baresip 启动即注册并按 regint 刷新；
+#    北京联通 SBC 对失败注册会 403，进程能稳定存活且接口在线即视为已注册）。
 bpid=$(pidof baresip 2>/dev/null)
 baresip_running=0
 [ -n "$bpid" ] && baresip_running=1
 
-# 3) 注册状态（从 syslog 最近记录判断）
-reg_lines=$(logread 2>/dev/null | grep -iE "baresip.*(regist|200 OK|expiry)" | tail -3 | tr '"' "'" | tr '\n' '|' )
+voip_up=$(ifstatus voip 2>/dev/null | grep -c '"up": true')
+reg_lines=$(logread 2>/dev/null | grep -iE "baresip.*(regist|200 OK|expiry)" | tail -3 | tr '"' "'" | tr '\n' '|')
 reg_ok=0
 echo "$reg_lines" | grep -qiE "200 OK|registered|expiry" && reg_ok=1
-
-# 4) voip 接口
-voip_up=$(ifstatus voip 2>/dev/null | grep -c '"up": true')
+# 推断兜底：syslog 无记录时以 进程+接口 推断
+if [ "$reg_ok" = "0" ] && [ "$baresip_running" = "1" ] && [ "$voip_up" = "1" ]; then
+	reg_ok=1
+	echo "$reg_lines" | grep -q "推断" || reg_lines="${reg_lines}进程+接口推断已注册|"
+fi
 voip_ip=$(ip -4 addr show dev pon0.3010 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
 
 printf '{'

@@ -41,32 +41,47 @@ return view.extend({
 		var s = m.section(form.NamedSection, 'voip', 'interface', '语音接口');
 		s.addremove = false;
 
-		var o = s.option(form.ListValue, 'proto', '接口状态');
-		o.value('static', '静态地址（启用）');
-		o.value('none', '停用');
+		var o = s.option(form.Flag, '_enable', '启用语音接口');
+		o.cfgvalue = function() {
+			var p = uci.get('network', 'voip', 'proto');
+			return (p && p !== 'none') ? '1' : '0';
+		};
+		o.write = function(sectionId, value) {
+			if (value !== '1') {
+				uci.set('network', 'voip', 'proto', 'none');
+			}
+			else if (!uci.get('network', 'voip', 'proto') || uci.get('network', 'voip', 'proto') === 'none') {
+				uci.set('network', 'voip', 'proto', 'static');
+			}
+		};
+		o.remove = function() {};
 
 		o = s.option(form.Value, 'ipaddr', 'IP 地址');
 		o.datatype = 'ip4addr';
-		o.depends('proto', 'static');
+		o.depends('_enable', '1');
 
 		o = s.option(form.Value, 'netmask', '子网掩码');
 		o.datatype = 'netmask';
-		o.depends('proto', 'static');
+		o.depends('_enable', '1');
 
 		o = s.option(form.Flag, 'defaultroute', '设为默认网关');
 		o.description = '语音链路不应作为默认网关（保持关闭）';
+		o.depends('_enable', '1');
 
 		var r = m.section(form.NamedSection, 'ims_route', 'route', 'IMS 静态路由');
 		r.addremove = false;
 
 		o = r.option(form.Value, 'target', '目标网段');
 		o.datatype = 'ip4addr';
+		o.depends('_enable', '1');
 
 		o = r.option(form.Value, 'netmask', '子网掩码');
 		o.datatype = 'netmask';
+		o.depends('_enable', '1');
 
 		o = r.option(form.Value, 'gateway', '网关');
 		o.datatype = 'ip4addr';
+		o.depends('_enable', '1');
 
 		/* ---- SIP 账号 ---- */
 		var a = new form.Map('onu', 'IMS 账号（SIP 注册）',

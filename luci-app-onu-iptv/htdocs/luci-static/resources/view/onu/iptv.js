@@ -17,8 +17,8 @@ if (!document.getElementById('onu-shared-css')) {
 }
 
 function parseVid(device) {
-	var m = /^(?:pon0)\.(\d{1,4})$/.exec(device || '');
-	return m ? m[2] : '';
+	var m = /^(?:pon0\.)?(\d{1,4})$/.exec(device || '');
+	return m ? m[1] : '';
 }
 
 return view.extend({
@@ -45,13 +45,45 @@ return view.extend({
 		var s = m.section(form.NamedSection, 'iptv', 'interface', 'IPTV 接口');
 		s.addremove = false;
 
+		var en = s.option(form.Flag, '_enable', '启用 IPTV 接口');
+		en.cfgvalue = function() {
+			var p = uci.get('network', 'iptv', 'proto');
+			return (p && p !== 'none') ? '1' : '0';
+		};
+		en.write = function(sectionId, value) {
+			if (value !== '1') {
+				uci.set('network', 'iptv', 'proto', 'none');
+			}
+			else if (!uci.get('network', 'iptv', 'proto') || uci.get('network', 'iptv', 'proto') === 'none') {
+				uci.set('network', 'iptv', 'proto', 'dhcp');
+			}
+		};
+		en.remove = function() {};
+
 		var o = s.option(form.ListValue, 'proto', '获取方式');
 		o.value('dhcp', 'DHCP（运营商自动下发）');
-		o.value('none', '停用');
+		o.value('static', '静态（手动）');
+		o.depends('_enable', '1');
+
+		o = s.option(form.Value, 'ipaddr', 'IP 地址');
+		o.datatype = 'ip4addr';
+		o.depends('_enable', '1');
+		o.depends('proto', 'static');
+
+		o = s.option(form.Value, 'netmask', '子网掩码');
+		o.datatype = 'netmask';
+		o.depends('_enable', '1');
+		o.depends('proto', 'static');
+
+		o = s.option(form.Value, 'gateway', '网关');
+		o.datatype = 'ip4addr';
+		o.depends('_enable', '1');
+		o.depends('proto', 'static');
 
 		o = s.option(form.Value, '_vlan', 'IPTV VLAN ID');
 		o.datatype = 'range(1,4094)';
 		o.placeholder = '3964';
+		o.depends('_enable', '1');
 		o.cfgvalue = function() { return parseVid(uci.get('network', 'iptv', 'device')); };
 		o.write = function(sectionId, value) {
 			var dev = uci.get('network', 'iptv', 'device');
@@ -69,11 +101,14 @@ return view.extend({
 
 		o = s.option(form.Flag, 'defaultroute', '设为默认网关');
 		o.description = 'IPTV 链路不应作为默认网关（保持关闭）';
+		o.depends('_enable', '1');
 
 		o = s.option(form.Flag, 'peerdns', '使用运营商 DNS');
 		o.description = '保持关闭，避免 IPTV 链路 DNS 污染本机解析';
+		o.depends('_enable', '1');
 
 		var o2 = s.option(form.DummyValue, '_mcvlan', '组播 VLAN');
+		o2.depends('_enable', '1');
 		o2.cfgvalue = function() {
 			return uci.get('network', 'pon0_4000')
 				? 'pon0.4000（VLAN 4000，组播预留，已配置）'
@@ -93,6 +128,7 @@ return view.extend({
 			'把某个 LAN 口桥接到 IPTV 链路：该口下的机顶盒将直接从运营商 IPTV 网络获取地址（与路由模式二选一）。');
 		o.value('', '不绑定（路由模式）');
 		['lan1', 'lan2', 'lan3', 'lan4'].forEach(function(p) { o.value(p, p); });
+		o.depends('_enable', '1');
 		o.cfgvalue = function() {
 			var b = findBrIptv();
 			if (!b) return '';
