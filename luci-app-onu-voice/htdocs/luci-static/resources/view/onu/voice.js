@@ -136,6 +136,8 @@ return view.extend({
 						name: '配置', content: E('div', {}, [
 							mapNode,
 							imsNode,
+							this.statusBox,
+							this.pingBox,
 							E('div', { 'class': 'cbi-page-actions' }, [
 								E('button', {
 									'class': 'cbi-button cbi-button-save',
@@ -144,7 +146,6 @@ return view.extend({
 							])
 						])
 					},
-					{ name: '状态', content: E('div', {}, [this.statusBox, this.pingBox]) },
 					{ name: '调试', content: this.debugBox }
 				]).then(function(node) {
 					return E('div', { 'class': 'cbi-map onu-scope' }, node);

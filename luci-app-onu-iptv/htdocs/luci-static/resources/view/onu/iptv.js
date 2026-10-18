@@ -185,8 +185,7 @@ return view.extend({
 		return m.render().then(function(mapNode) {
 			self.refreshStatus();
 			return tabs.render([
-				{ name: '配置', content: E('div', {}, [mapNode, self.mcBox]) },
-				{ name: '状态', content: self.statusBox },
+				{ name: '配置', content: E('div', {}, [mapNode, self.mcBox, self.statusBox]) },
 				{
 					name: '调试', content: E('div', {}, [
 						E('div', { 'class': 'cbi-page-actions' }, [

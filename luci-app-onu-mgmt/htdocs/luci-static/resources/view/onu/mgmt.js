@@ -45,8 +45,9 @@ return view.extend({
 			'TR-069（CWMP）是运营商远程管理光猫的通道：光猫周期性向 ACS 上报，ACS 可反向下发或修改配置（北京联通的 PPPoE / IPTV / VoIP 业务参数均通过该通道下发）。客户端为 easycwmp。');
 		m.readonly = !L.hasViewPermission();
 
-		var s = m.section(form.NamedSection, 'local', 'local', '本机监听（ConnectionRequest）',
+		var s = m.section(form.TypedSection, 'local', '本机监听（ConnectionRequest）',
 			'ACS 反向主动连接光猫时使用的 HTTP 端口与认证');
+		s.anonymous = true;
 		s.addremove = false;
 
 		var o = s.option(form.Flag, 'enable', '启用本机监听');
@@ -57,7 +58,8 @@ return view.extend({
 		o.datatype = 'port';
 		o.placeholder = '7547';
 
-		var a = m.section(form.NamedSection, 'acs', 'acs', 'ACS 服务器');
+		var a = m.section(form.TypedSection, 'acs', 'ACS 服务器');
+		a.anonymous = true;
 		a.addremove = false;
 
 		o = a.option(form.Value, 'url', 'ACS 地址');
@@ -90,6 +92,7 @@ return view.extend({
 		var cfgPane = m.render().then(function(mapNode) {
 			return E('div', {}, [
 				mapNode,
+				self.statusBox,
 				E('div', { 'class': 'cbi-page-actions' }, [
 					E('button', {
 						'class': 'cbi-button cbi-button-save',
@@ -101,7 +104,6 @@ return view.extend({
 
 		return tabs.render([
 			{ name: '配置', content: cfgPane },
-			{ name: '状态', content: self.statusBox },
 			{
 				name: '调试', content: E('div', {}, [
 					E('div', { 'class': 'cbi-section' }, [

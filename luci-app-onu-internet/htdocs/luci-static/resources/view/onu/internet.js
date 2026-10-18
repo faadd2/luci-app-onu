@@ -90,6 +90,7 @@ return view.extend({
 				{
 					name: '配置', content: E('div', {}, [
 						mapNode,
+						self.statusBox,
 						E('div', { 'class': 'cbi-section' }, [
 							E('h3', {}, '操作'),
 							E('div', { 'class': 'cbi-page-actions' }, [
@@ -106,7 +107,6 @@ return view.extend({
 						])
 					])
 				},
-				{ name: '状态', content: self.statusBox },
 				{
 					name: '调试', content: E('div', {}, [
 						E('div', { 'class': 'cbi-page-actions' }, [
