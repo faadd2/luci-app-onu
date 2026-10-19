@@ -1,0 +1,20 @@
+#!/bin/sh
+# 思路2 迁移（10-19）：撤除本包旧版自带的 /etc/init.d/baresip（与 feed 包同路径冲突），
+# 恢复 feed 官方 init 并启用。仅处理「升级自旧版」的场景（overlay 残留定制 init）；
+# 全新刷机 overlay 无残留，直接启用官方 init 即可。
+if [ -f /etc/init.d/baresip ] && grep -q "ZN504XG-D 定制版" /etc/init.d/baresip 2>/dev/null; then
+	rm -f /etc/init.d/baresip
+	rm -f /etc/rc.d/S*baresip* /etc/rc.d/K*baresip* 2>/dev/null
+fi
+# 官方 init（rom 内 feed 包提供）设为开机自启
+/etc/init.d/baresip enable 2>/dev/null || true
+
+# 新增 SIP 通用参数的缺省值补齐（升级自旧版的设备没有这些选项）
+for kv in "sip_port 5060" "transport udp" "reg_port 5060" "ptime 20"; do
+	key=${kv%% *}
+	val=${kv#* }
+	uci -q get onu.ims."$key" >/dev/null 2>&1 || uci set onu.ims."$key"="$val"
+done
+uci commit onu 2>/dev/null || true
+
+exit 0

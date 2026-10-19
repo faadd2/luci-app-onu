@@ -1,48 +1,88 @@
 #!/bin/sh
-# onu-voice-apply — 从 UCI onu.ims 生成 baresip 配置并重启服务
-# 由北京联通 IMS 实测得出的必要参数：
-#   - 固定源端口 5060（SBC 对随机端口完全沉默）
-#   - auth_user = 完整 SIP ID（带 +86 与域名，裸号码 403）
+# onu-voice-apply — 从 UCI onu.ims 生成官方 baresip 配置并重启服务
+# 思路2（10-19 实机验证通过）：不再自带 init.d/baresip（与 feed 包同路径冲突），
+# 改为生成官方 init 消费的 UCI（/etc/config/baresip）+ 全局配置（/etc/baresip/config），
+# 由 feed 官方 init.d/baresip 承载服务（procd、respawn、user baresip）。
+# 北京联通 IMS 实测必要参数：
+#   - 完整 SIP ID 作 auth_user（裸号码 403）
+#   - sip_listen 绑 voip 口 IP:5060（SBC 对随机源端口完全沉默）
+# 注意：配置不加载 stdio.so——实机验证它与 procd /dev/null 标准输入组合会致
+# baresip 每 ~50s 静默退出（epoll fd0 EPERM）。
 set -e
 
 sip_account=$(uci -q get onu.ims.sip_account)
 sip_password=$(uci -q get onu.ims.sip_password)
 proxy=$(uci -q get onu.ims.proxy | awk '{print $1}')
 reg_period=$(uci -q get onu.ims.reg_period)
+sip_port=$(uci -q get onu.ims.sip_port)
+transport=$(uci -q get onu.ims.transport)
+reg_port=$(uci -q get onu.ims.reg_port)
+ptime=$(uci -q get onu.ims.ptime)
 
 [ -z "$sip_account" ] && { echo '{"ok":false,"msg":"未配置 SIP 账号"}'; exit 1; }
 [ -z "$sip_password" ] && { echo '{"ok":false,"msg":"未配置 SIP 密码"}'; exit 1; }
 [ -z "$proxy" ] && proxy="10.203.255.17"
 [ -z "$reg_period" ] && reg_period=3600
+[ -z "$sip_port" ] && sip_port=5060
+[ -z "$transport" ] && transport=udp
+[ -z "$reg_port" ] && reg_port=5060
+[ -z "$ptime" ] && ptime=20
+
+user_part=${sip_account%@*}
+server_part=${sip_account#*@}
 
 # 监听地址取 voip 口当前 IP（无则先尝试拉起接口）
-voip_ip=$(ip -4 addr show dev pon0.3010 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
+voip_dev=$(uci -q get network.voip.device)
+voip_dev=${voip_dev:-pon0.3010}
+voip_ip=$(ip -4 addr show dev "$voip_dev" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
 if [ -z "$voip_ip" ]; then
 	ifup voip 2>/dev/null || true
 	sleep 3
-	voip_ip=$(ip -4 addr show dev pon0.3010 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
+	voip_ip=$(ip -4 addr show dev "$voip_dev" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
 fi
 [ -z "$voip_ip" ] && { echo '{"ok":false,"msg":"voip 接口无 IP，无法绑定监听端口"}'; exit 1; }
 
-mkdir -p /root/.baresip
+# sip_listen 行：sip_port=0 表示不绑定（随机源端口）
+if [ "$sip_port" = "0" ]; then
+	sip_listen_line=""
+else
+	sip_listen_line="sip_listen		${voip_ip}:${sip_port}"
+fi
 
-cat > /root/.baresip/accounts <<EOF
-<sip:${sip_account}>;auth_user="${sip_account}";auth_pass=${sip_password};regint=${reg_period};registrar="sip:${proxy}:5060;transport=udp";ptime=20
+# 1) 官方格式 UCI（feed init 从 main 段读 enable/options、foreach account 段拼账号行）
+cat > /etc/config/baresip <<EOF
+config baresip 'main'
+	option enable '1'
+	option options '-s'
+
+config account
+	option user '${user_part}'
+	option password '${sip_password}'
+	option server '${server_part}'
+	option transport '${transport}'
+	option append 'auth_user=${sip_account};regint=${reg_period};registrar=sip:${proxy}:${reg_port};ptime=${ptime}'
 EOF
 
-cat > /root/.baresip/config <<EOF
+# 2) 全局配置（feed 包不附带此路径，由本包供货；无 stdio.so）
+mkdir -p /etc/baresip
+cat > /etc/baresip/config <<EOF
 module_path		/usr/lib/baresip/modules
 module		account.so
 module		g711.so
 module		menu.so
-module		stdio.so
+module		ctrl_tcp.so
+ctrl_tcp_listen		127.0.0.1:4444
 audio_player		null,null
 audio_source		null,null
 audio_alert		null,null
-sip_listen		${voip_ip}:5060
-sip_transports		udp
+${sip_listen_line}
+sip_transports		${transport}
 EOF
 
 /etc/init.d/baresip restart >/dev/null 2>&1 || /etc/init.d/baresip start >/dev/null 2>&1 || true
 
-echo "{\"ok\":true,\"msg\":\"已生成配置并重启 baresip（监听 ${voip_ip}:5060）\"}"
+if [ "$sip_port" = "0" ]; then
+	echo "{\"ok\":true,\"msg\":\"已生成配置并重启 baresip（未绑定源端口，随机）\"}"
+else
+	echo "{\"ok\":true,\"msg\":\"已生成配置并重启 baresip（监听 ${voip_ip}:${sip_port}）\"}"
+fi
