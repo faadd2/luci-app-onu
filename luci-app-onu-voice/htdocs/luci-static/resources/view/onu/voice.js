@@ -535,9 +535,9 @@ return view.extend({
 					};
 					var st = stMap[c.state] || stMap.UNKNOWN;
 					var who = c.name ?
-						[c.name, c.loc ? E('span', { 'class': 'label', 'style': 'margin-left:1em' }, c.loc) : '']
+						[c.name, c.loc ? E('span', { 'class': 'label label-info', 'style': 'margin-left:1em' }, c.loc) : '']
 						: [E('var', { 'style': 'font-size:1.3em' }, c.num || '-'),
-						   c.loc ? E('span', { 'class': 'label', 'style': 'margin-left:1em' }, c.loc) : ''];
+						   c.loc ? E('span', { 'class': 'label label-info', 'style': 'margin-left:1em' }, c.loc) : ''];
 					return E('tr', { 'class': 'tr' }, [
 						E('td', { 'class': 'td left', 'style': 'white-space:nowrap' }, who),
 						E('td', { 'class': 'td left', 'style': 'white-space:nowrap' }, E('span', { 'class': st[1] }, st[0]))

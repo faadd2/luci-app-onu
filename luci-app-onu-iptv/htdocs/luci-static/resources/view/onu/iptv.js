@@ -287,6 +287,7 @@ return view.extend({
 		]);
 
 		this.statusBox = E('div', { 'class': 'cbi-section' }, [E('h3', {}, '链路状态'), E('p', {}, '加载中…')]);
+		poll.add(L.bind(this.refreshStatus, this), 5);
 
 		this.debugLog = E('pre', {
 			'style': 'max-height: 18em; overflow: auto; margin: 0.5rem 1rem 1rem; padding: 0.5em; ' +

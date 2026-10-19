@@ -100,6 +100,7 @@ return view.extend({
 		var statusBox = E('div', { 'class': 'cbi-section' }, [E('h3', {}, '连接状态'), E('p', {}, '加载中…')]);
 
 		this.statusBox = statusBox;
+		poll.add(L.bind(this.refreshStatus, this), 5);
 
 		return m.render().then(function(mapNode) {
 			self.refreshStatus();
