@@ -7,6 +7,7 @@
 'require uci';
 'require view';
 'require view.onu.tabs as tabs';
+'require onu.phone-loc2 as phoneloc';
 
 /* 共享主题样式 onu.css（暗色主题 label 徽标/表格标题行修复）；id 防重复 */
 if (!document.getElementById('onu-shared-css')) {
@@ -27,12 +28,15 @@ var IMS_PROXIES = ['10.203.255.17', '10.203.255.1'];
 
 return view.extend({
 	load: function() {
-		return L.resolveDefault(fs.exec_direct('/sbin/ifstatus', ['voip']), '{}');
+		return Promise.all([
+			L.resolveDefault(fs.exec_direct('/sbin/ifstatus', ['voip']), '{}'),
+			uci.load('onu')
+		]);
 	},
 
 	render: function(data) {
 		var voipIf = {};
-		try { voipIf = JSON.parse(data) || {}; } catch (e) {}
+		try { voipIf = JSON.parse(data[0]) || {}; } catch (e) {}
 
 		var m = new form.Map('network', '语音设置',
 			'语音数据通路（北京联通 IMS VLAN 3010）。SIP 注册由 baresip 承担，账号在下方填写后点「应用并重启 SIP」。');
@@ -111,6 +115,18 @@ return view.extend({
 		o.datatype = 'uinteger';
 		o.default = '3600';
 
+		/* ---- 本机黄页（软话机标签内，与软话机设置放在一起） ---- */
+		var pbm = new form.Map('onu', '本机黄页',
+			'来电/去电号码匹配后显示姓名（仅保存在本机）。');
+		pbm.readonly = !L.hasViewPermission();
+		var pbs = pbm.section(form.GridSection, 'phonebook', '黄页条目');
+		pbs.anonymous = true;
+		pbs.addremove = true;
+		pbs.sortable = true;
+		o = pbs.option(form.Value, 'number', '号码');
+		o.datatype = 'phonedigit';
+		o = pbs.option(form.Value, 'name', '姓名');
+
 		/* ---- 状态区 ---- */
 		this.statusBox = E('div', { 'class': 'cbi-section' }, [
 			E('h3', {}, '语音链路状态'),
@@ -147,36 +163,87 @@ return view.extend({
 			E('div', { 'id': 'onu-voice-debug' }, E('p', {}, '点击按钮查看日志'))
 		]);
 
+		/* ---- 软话机（baresip ctrl_tcp 桥，信令控制面） ---- */
+		this.phoneBox = E('div', { 'class': 'cbi-section' }, [
+			E('h3', {}, '软话机'),
+			E('p', { 'class': 'cbi-section-descr' },
+				'通过 baresip 控制接口拨号/接听（信令面）。通话声音需 FXS 话机或后续浏览器音频方案。'),
+			E('div', { 'id': 'onu-voice-phone-status' }, E('p', {}, '加载中…')),
+			E('div', { 'style': 'margin:0.5em 0' }, [
+				E('input', {
+					'id': 'onu-voice-phone-num',
+					'type': 'text',
+					'placeholder': '号码（外地前加 0）',
+					'style': 'width:16em;padding:0.4em;font-size:1.1em'
+				}),
+				' ',
+				E('button', {
+					'class': 'cbi-button cbi-button-action',
+					'click': ui.createHandlerFn(this, 'phoneDial')
+				}, '呼叫'),
+				' ',
+				E('button', {
+					'class': 'cbi-button cbi-button-positive',
+					'id': 'onu-voice-phone-answer',
+					'style': 'display:none',
+					'click': ui.createHandlerFn(this, 'phoneAnswer')
+				}, '接听'),
+				' ',
+				E('button', {
+					'class': 'cbi-button cbi-button-reset',
+					'id': 'onu-voice-phone-hangup',
+					'style': 'display:none',
+					'click': ui.createHandlerFn(this, 'phoneHangup')
+				}, '挂断')
+			]),
+			this.buildKeypad()
+		]);
+		poll.add(L.bind(this.refreshPhone, this), 3);
+
 		return m.render().then(function(mapNode) {
 			return a.render().then(function(imsNode) {
 				return r.render().then(function(routeNode) {
-					this.refreshStatus();
-					/* 主开关折叠：账号参数与静态路由在另外的 Map，depends 跨 Map 无效，手动隐藏 */
-					var enInput = mapNode.querySelector('[data-field$="._enable"] input[type="checkbox"]');
-					var applyVis = function() {
-						var on = enInput ? enInput.checked : true;
-						imsNode.style.display = on ? '' : 'none';
-						routeNode.style.display = on ? '' : 'none';
-					};
-					if (enInput) enInput.addEventListener('change', applyVis);
-					applyVis();
-					return tabs.render([
-						{
-							name: '配置', content: E('div', {}, [
-								mapNode,
-								imsNode,
-								routeNode,
-								E('div', { 'class': 'cbi-page-actions' }, [
-									E('button', {
-										'class': 'cbi-button cbi-button-save',
-										'click': ui.createHandlerFn(this, 'handleSaveAndApply')
-									}, '保存并应用 SIP')
+					return pbm.render().then(function(pbNode) {
+						this.refreshStatus();
+						/* 主开关折叠：账号参数与静态路由在另外的 Map，depends 跨 Map 无效，手动隐藏 */
+						var enInput = mapNode.querySelector('[data-field$="._enable"] input[type="checkbox"]');
+						var applyVis = function() {
+							var on = enInput ? enInput.checked : true;
+							imsNode.style.display = on ? '' : 'none';
+							routeNode.style.display = on ? '' : 'none';
+						};
+						if (enInput) enInput.addEventListener('change', applyVis);
+						applyVis();
+						return tabs.render([
+							{
+								name: '配置', content: E('div', {}, [
+									mapNode,
+									imsNode,
+									routeNode,
+									E('div', { 'class': 'cbi-page-actions' }, [
+										E('button', {
+											'class': 'cbi-button cbi-button-save',
+											'click': ui.createHandlerFn(this, 'handleSaveAndApply')
+										}, '保存并应用 SIP')
+									])
 								])
-							])
-						},
-						{ name: '调试', content: this.debugBox }
-					]).then(function(node) {
-						return E('div', { 'class': 'cbi-map onu-scope' }, [this.statusBox, this.pingBox, node]);
+							},
+							{ name: '调试', content: this.debugBox },
+							{
+								name: '软话机', content: E('div', {}, [
+									this.phoneBox,
+									pbNode,
+									E('div', { 'class': 'cbi-page-actions' }, [
+										E('button', {
+											'class': 'cbi-button cbi-button-save',
+											'click': ui.createHandlerFn(this, 'savePhonebook')
+										}, '保存黄页')
+									])
+								])
+							}
+						]).then(function(node) {
+							return E('div', { 'class': 'cbi-map onu-scope' }, [this.statusBox, this.pingBox, node]);
+						}.bind(this));
 					}.bind(this));
 				}.bind(this));
 			}.bind(this));
@@ -285,6 +352,189 @@ return view.extend({
 				]);
 			});
 			dom.content(box, E('table', { 'class': 'table' }, rows));
+		});
+	},
+
+	/* ---------- 软话机 ---------- */
+
+	buildKeypad: function() {
+		/* 4x3 表格布局：末列 * 0 # 竖排（1 2 3 * / 4 5 6 0 / 7 8 9 #），单元格等宽强制对齐 */
+		var rows = [['1','2','3','*'],['4','5','6','0'],['7','8','9','#']];
+		var input = function() { return document.getElementById('onu-voice-phone-num'); };
+		return E('table', { 'class': 'onu-keypad' },
+			rows.map(function(r) {
+				return E('tr', {}, r.map(function(k) {
+					return E('td', {},
+						E('button', {
+							'class': 'cbi-button',
+							'click': function() {
+								var el = input();
+								if (el) el.value = (el.value || '') + k;
+							}
+						}, k));
+				}));
+			}));
+	},
+
+	phoneCmd: function(args, okMsg) {
+		return fs.exec_direct('/usr/libexec/onu-voice-phone', args).then(function(out) {
+			var res = {};
+			try { res = JSON.parse(out); } catch (e) { res = { response: false, error: out }; }
+			if (!res.response) {
+				ui.addNotification(null, E('p', {}, '软话机：' + (res.error || '控制接口无响应')), 'warning');
+			} else if (res.ok === false) {
+				ui.addNotification(null, E('p', {}, '软话机：' + ((res.data || '').trim() || '命令执行失败')), 'warning');
+			} else if (okMsg) {
+				ui.addNotification(null, E('p', {}, '软话机：' + okMsg), 'info');
+			}
+			this.refreshPhone();
+		}.bind(this));
+	},
+
+	savePhonebook: function() {
+		return uci.save()
+			.then(function() { return uci.apply(); })
+			.then(function() {
+				ui.addNotification(null, E('p', {}, '黄页已保存'), 'info');
+			});
+	},
+
+	phoneDial: function() {
+		var el = document.getElementById('onu-voice-phone-num');
+		var num = el ? (el.value || '').trim() : '';
+		if (!num) {
+			ui.addNotification(null, E('p', {}, '软话机：请先输入号码'), 'warning');
+			return Promise.resolve();
+		}
+		return this.phoneCmd(['dial', num]);
+	},
+
+	phoneAnswer: function() {
+		return this.phoneCmd(['answer']);
+	},
+
+	phoneHangup: function() {
+		return this.phoneCmd(['hangup']);
+	},
+
+	/* 轮询 baresip 通话状态：空闲 / 呼出振铃 / 来电振铃 / 通话中
+	 * listcalls 文本每通话含 state 与 peer（sip:号码@代理），逐条解析 */
+	refreshPhone: function() {
+		var box = document.getElementById('onu-voice-phone-status');
+		if (!box) return Promise.resolve();
+		var answerBtn = document.getElementById('onu-voice-phone-answer');
+		var hangupBtn = document.getElementById('onu-voice-phone-hangup');
+		return fs.exec_direct('/usr/libexec/onu-voice-phone', ['status']).then(function(out) {
+			var res = {};
+			try { res = JSON.parse(out); } catch (e) {}
+			var txt = (typeof res.data === 'string') ? res.data : '';
+			var mm = /Active calls \((\d+)\)/.exec(txt);
+			var nCalls = mm ? Number(mm[1]) : (res.response === false ? -1 : 0);
+			if (answerBtn) answerBtn.style.display = /INCOMING/i.test(txt) ? '' : 'none';
+			if (hangupBtn) hangupBtn.style.display = nCalls > 0 ? '' : 'none';
+			if (nCalls < 0) {
+				dom.content(box, E('p', {}, 'baresip 控制接口未响应（确认已安装 baresip-mod-ctrl_tcp 并已重启 SIP）'));
+				return;
+			}
+			if (nCalls === 0) {
+				this._hadIncoming = false;
+				dom.content(box, E('p', {}, '空闲'));
+				return;
+			}
+			/* 提取每通话：state 与对端号码（兼容 sip:user@host 与裸 user@host 两种打印） */
+			var calls = [];
+			var re = /(INCOMING|OUTGOING|RINGING|ESTABLISHED)/gi;
+			var uriRe = /(?:sip|tel):([+0-9][0-9*#+]{4,})/g;
+			var states = [];
+			var m;
+			while ((m = re.exec(txt))) states.push(m[1].toUpperCase());
+			var uris = [];
+			while ((m = uriRe.exec(txt))) uris.push(m[1] || m[2]);
+			/* 状态与 URI 数量可能对不齐（被叫显示名等），以号码列为准对齐 */
+			for (var i = 0; i < Math.max(states.length, 1); i++)
+				calls.push({ state: states[i] || 'UNKNOWN', num: uris[i] || '' });
+
+			var hasIncoming = states.indexOf('INCOMING') >= 0;
+			var hasEst = states.indexOf('ESTABLISHED') >= 0;
+			var state = hasEst ? ['通话中', 'label label-success']
+				: hasIncoming ? ['来电振铃', 'label label-warning']
+				: ['呼叫进行中', 'label label-info'];
+
+			/* 来电：首次检测到时发浏览器桌面通知 */
+			if (hasIncoming && !this._hadIncoming) {
+				this._hadIncoming = true;
+				var caller = uris[0] || '未知号码';
+				if ('Notification' in window && Notification.permission === 'granted')
+					new Notification('ONU 软话机 — 来电', { body: caller });
+				else if ('Notification' in window && Notification.permission === 'default')
+					Notification.requestPermission();
+			}
+
+			/* 黄页 + 归属地 enrichment */
+			/* LuCI 加载器可能直接实例化 baseclass 导出：类则 new，实例则直接用 */
+			this._pl = this._pl || (typeof phoneloc === 'function' ? new phoneloc() : phoneloc);
+			var pb = {};
+			uci.sections('onu', 'phonebook', function(s) {
+				if (s.number && s.name)
+					pb[String(s.number).replace(/[^\d]/g, '')] = s.name;
+			});
+			var jobs = calls.map(function(c) {
+				var d = String(c.num || '').replace(/[^\d]/g, '');
+				c.name = pb[d] || pb[d.substring(d.length - 11)] || '';
+				return this._pl.lookup(c.num).then(function(loc) {
+					c.loc = loc;
+					return c;
+				});
+			}, this);
+			var renderKids = function() {
+				var rows = calls.map(function(c) {
+					var stMap = {
+						'INCOMING': ['来电', 'label label-warning'],
+						'OUTGOING': ['呼出', 'label label-info'],
+						'RINGING': ['振铃', 'label label-info'],
+						'ESTABLISHED': ['通话中', 'label label-success'],
+						'UNKNOWN': ['进行中', 'label']
+					};
+					var st = stMap[c.state] || stMap.UNKNOWN;
+					var who = c.name ?
+						[c.name, c.loc ? E('span', { 'class': 'label', 'style': 'margin-left:1em' }, c.loc) : '']
+						: [E('var', { 'style': 'font-size:1.3em' }, c.num || '-'),
+						   c.loc ? E('span', { 'class': 'label', 'style': 'margin-left:1em' }, c.loc) : ''];
+					return E('tr', { 'class': 'tr' }, [
+						E('td', { 'class': 'td left', 'style': 'white-space:nowrap' }, who),
+						E('td', { 'class': 'td left', 'style': 'white-space:nowrap' }, E('span', { 'class': st[1] }, st[0]))
+					]);
+				});
+				/* 总体状态横幅（与每行明细同源：baresip listcalls 汇总） */
+				var kids = [
+					E('p', {}, E('span', { 'class': state[1] }, state[0])),
+					E('table', { 'class': 'table', 'style': 'width:auto;border-collapse:collapse' }, rows)
+				];
+				if (hasIncoming) {
+					kids.push(E('div', { 'class': 'cbi-section', 'style': 'margin-top:0.5em' }, [
+						E('p', {}, '来电接听指引：'),
+						E('ul', {}, [
+							E('li', {}, '点上方「接听」即接通信令；通话声音需 FXS 话机（修复中）或手机软话机。'),
+							E('li', {}, '手机接听：LAN 下 Linphone/MicroSIP 按联通参数配置（语音调试页可查 SIP 日志与参数），需先停用本机 baresip——联通单注册互踢。')
+						])
+					]));
+				}
+				if (hasEst) {
+					kids.push(E('div', { 'class': 'cbi-section', 'style': 'margin-top:0.5em' }, [
+						E('p', {}, [
+							E('span', { 'class': 'label label-warning' }, '已接通，但当前无音频线路'),
+							' 本页面仅接通信令，听不到对方。声音出路：① FXS 话机（修复中）；② 手机 Linphone/MicroSIP（需停用本机 baresip 后由手机注册）。'
+						])
+					]));
+				}
+				dom.content(box, kids);
+			};
+			/* 先立即显示号码/状态，归属地查询异步完成后重绘补上 */
+			renderKids();
+			return Promise.all(jobs).then(renderKids);
+		}.bind(this)).catch(function(err) {
+			dom.content(box, E('p', { 'class': 'label label-danger' },
+				'状态刷新失败：' + ((err && err.message) || err)));
 		});
 	}
 });

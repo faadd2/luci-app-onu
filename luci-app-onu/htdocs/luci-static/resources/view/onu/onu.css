@@ -328,3 +328,43 @@
 	border-bottom: 1px solid var(--border-color, rgba(136, 152, 170, 0.35));
 	font-weight: 600;
 }
+
+/*
+ * 软话机拨号键盘（2026-10-19）：4 列 x 3 行，* 0 # 末列竖排。
+ * Argon 对裸 table 有 element 级规则（width:100%、border-top !important、
+ * 隔行底色），此处必须以 !important 全覆盖，保证键盘紧凑无框线。
+ */
+.onu-keypad {
+	width: auto !important;
+	font-size: 1rem !important;
+	border-collapse: separate !important;
+	border-spacing: 4px !important;
+	margin-top: 0.5em !important;
+	background: transparent !important;
+	box-shadow: none !important;
+}
+
+.onu-keypad tbody,
+.onu-keypad tr,
+.onu-keypad td {
+	background: transparent !important;
+	border: none !important;
+	box-shadow: none !important;
+}
+
+.onu-keypad td {
+	padding: 0 !important;
+	line-height: 0;
+}
+
+.onu-keypad .cbi-button {
+	display: inline-block;
+	box-sizing: border-box;
+	width: 3.4em;
+	height: 2.4em;
+	margin: 0;
+	padding: 0;
+	font-size: 1.05rem;
+	text-align: center;
+	line-height: 2.4em;
+}

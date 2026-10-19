@@ -36,6 +36,8 @@ module		account.so
 module		g711.so
 module		menu.so
 module		stdio.so
+module		ctrl_tcp.so
+ctrl_tcp_listen		127.0.0.1:4444
 audio_player		null,null
 audio_source		null,null
 audio_alert		null,null

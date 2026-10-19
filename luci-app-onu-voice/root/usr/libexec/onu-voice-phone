@@ -1,0 +1,69 @@
+#!/bin/sh
+# onu-voice-phone — baresip ctrl_tcp 桥（LuCI 软话机页后端）
+# 用法: onu-voice-phone status|dial <号码>|answer|hangup|hangupall
+# 协议: 127.0.0.1:4444 换行分隔 JSON（baresip mod-ctrl_tcp）
+CTRL_PORT=4444
+
+ctrl_cmd() {
+	# $1 = JSON 请求行；baresip ctrl_tcp 使用 netstring 成帧（<len>:<json>,）
+	# 同连接会收到事件推送，需逐条解帧并只取含 "response" 的响应行
+	local payload="$1" len
+	len=$(printf '%s' "$payload" | wc -c)
+	printf '%s:%s,' "$len" "$payload" \
+		| { cat; sleep 1; } \
+		| timeout 3 nc 127.0.0.1 $CTRL_PORT 2>/dev/null \
+		| tr -d '\000' \
+		| awk '
+			{ buf = buf $0 }
+			{
+				while (match(buf, /^[0-9]+:/)) {
+					n = substr(buf, RSTART, RLENGTH - 1) + 0
+					rest = substr(buf, RSTART + RLENGTH)
+					if (length(rest) < n + 1) break
+					msg = substr(rest, 1, n)
+					if (msg ~ /"response"/) { print msg; found = 1; exit }
+					buf = substr(rest, n + 2)
+				}
+			}
+			END { if (!found) print "{\"response\":false,\"error\":\"no reply from baresip\"}" }
+		'
+}
+
+case "$1" in
+	status)
+		ctrl_cmd '{"command":"listcalls","token":"onu"}'
+		;;
+	dial)
+		[ -z "$2" ] && { echo '{"response":false,"error":"missing number"}'; exit 1; }
+		uri="$2"
+		case "$uri" in
+			sip:*|tel:*) ;;
+			*)
+				proxy=$(uci -q get onu.ims.proxy | awk '{print $1}')
+				[ -z "$proxy" ] && proxy="10.203.255.17"
+				uri="sip:${uri}@${proxy}"
+				;;
+		esac
+		# JSON 转义（号码仅含数字与 *#+ 时无特殊字符，保守起见去引号）
+		uri=$(printf '%s' "$uri" | tr -d '"\\')
+		ctrl_cmd "{\"command\":\"dial\",\"params\":\"${uri}\",\"token\":\"onu\"}"
+		;;
+	answer)
+		ctrl_cmd '{"command":"accept","token":"onu"}'
+		;;
+	hangup)
+		ctrl_cmd '{"command":"hangup","token":"onu"}'
+		;;
+	hangupall)
+		ctrl_cmd '{"command":"hangupall","token":"onu"}'
+		;;
+	raw)
+		# 透传任意 JSON：onu-voice-phone raw '<json>'
+		shift
+		ctrl_cmd "$1"
+		;;
+	*)
+		echo "usage: $0 status|dial <number>|answer|hangup|hangupall" >&2
+		exit 1
+		;;
+esac
