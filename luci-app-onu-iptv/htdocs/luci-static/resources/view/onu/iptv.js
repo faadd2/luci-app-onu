@@ -353,10 +353,10 @@ return view.extend({
 				E('td', { 'class': 'td left' }, name),
 				E('td', { 'class': 'td left' }, installed
 					? E('span', { 'class': 'label label-success' }, '已安装')
-					: E('span', { 'class': 'label' }, '未安装')),
+					: E('span', { 'class': 'label label-danger' }, '未安装')),
 				E('td', { 'class': 'td left' }, pids.indexOf(name) >= 0
 					? E('span', { 'class': 'label label-success' }, '运行中')
-					: E('span', { 'class': 'label' }, '未运行'))
+					: E('span', { 'class': 'label label-warning' }, '未运行'))
 			]));
 		});
 		dom.content(this.mcStatus, E('table', { 'class': 'table' }, rows));
@@ -392,8 +392,8 @@ return view.extend({
 			row('运行时间', st.uptime != null ? '%d 秒'.format(st.uptime) : '-');
 			var bound = (uci.get('network', 'iptv', 'device') === 'br-iptv');
 			row('机顶盒绑定', bound
-				? E('span', { 'class': 'label label-info' }, '桥接模式（br-iptv）')
-				: E('span', { 'class': 'label' }, '路由模式'));
+				? E('span', { 'class': 'label label-success' }, '桥接模式（br-iptv）')
+				: E('span', { 'class': 'label label-info' }, '路由模式'));
 			dom.content(box, [E('h3', {}, '链路状态'), E('table', { 'class': 'table' }, rows)]);
 		});
 	},
