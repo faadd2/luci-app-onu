@@ -13,7 +13,7 @@ if (!document.getElementById('onu-shared-css')) {
 	var _onuCss = document.createElement('link');
 	_onuCss.id = 'onu-shared-css';
 	_onuCss.rel = 'stylesheet';
-	_onuCss.href = L.resource('view/onu/onu.css');
+	_onuCss.href = L.resource('view/onu/onu.css') + '?v=3';
 	document.head.appendChild(_onuCss);
 }
 
