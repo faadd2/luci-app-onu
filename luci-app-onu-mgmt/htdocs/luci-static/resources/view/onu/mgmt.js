@@ -234,6 +234,43 @@ return view.extend({
 				E('td', { 'class': 'td left' }, v == null || v === '' ? '-' : v)
 			]));
 		}
+
+		/* ---- TR-069 拨号链路（与上网/IPTV/语音页对齐的错误码对照表） ---- */
+		var PPP_ERR = {
+			'USER_REQUEST': '用户请求断开',
+			'AUTH_TO_FAI': '认证失败（账号/密码错误）',
+			'NEGOTIATION_FAILED': 'PPP 协商失败',
+			'NO_CARRIER': '无载体信号（对端无响应）',
+			'LOOPBACK': '检测到环回',
+			'OPTION_ERROR': '配置参数错误'
+		};
+		if (linkSt) {
+			row('链路状态', linkSt.up
+				? E('span', { 'class': 'label label-success' }, '在线')
+				: (linkSt.pending
+					? E('span', { 'class': 'label label-info' }, '连接中…')
+					: E('span', { 'class': 'label label-warning' }, '离线')));
+			row('IP 地址', (linkSt['ipv4-address'] || []).map(function(a) { return a.address; }).join(', ') || '-');
+			row('连接时间', linkSt.uptime != null ? '%d 秒'.format(linkSt.uptime) : '-');
+			var errs = (linkSt.errors || []).map(function(e) {
+				var code = (e && e.code) || '';
+				if (PPP_ERR[code])
+					return '%s（%s）'.format(PPP_ERR[code], code);
+				return /^UNKNOWN_ERROR/.test(code) ? '未知错误（%s）'.format(code) : (code || '未知');
+			});
+			row('拨号错误', errs.length
+				? [E('span', { 'class': 'label label-danger' }, errs.join('；'))]
+				: (linkSt.up
+					? E('span', { 'class': 'label label-success' }, '无')
+					: E('span', { 'class': 'label' }, '-')));
+		}
+		else {
+			row('链路状态', E('span', { 'class': 'label' }, '未知'));
+			row('IP 地址', '-');
+			row('连接时间', '-');
+			row('拨号错误', E('span', { 'class': 'label' }, '未知'));
+		}
+
 		row('ACS 客户端启用', acsOn != null
 			? (acsOn
 				? E('span', { 'class': 'label label-success' }, '已启用')
@@ -256,31 +293,7 @@ return view.extend({
 			this.clientBadge.textContent = installed ? '已安装（推荐）' : '未安装（推荐安装）';
 		}
 
-		/* ---- TR-069 拨号链路状态（与上网/IPTV/语音页对齐） ---- */
-		var lrows = [];
-		function lrow(k, v) {
-			lrows.push(E('tr', { 'class': 'tr' }, [
-				E('td', { 'class': 'td left', 'style': 'width: 30%' }, k),
-				E('td', { 'class': 'td left' }, v == null || v === '' ? '-' : v)
-			]));
-		}
-		if (linkSt) {
-			lrow('链路状态', linkSt.up
-				? E('span', { 'class': 'label label-success' }, '在线')
-				: (linkSt.pending
-					? E('span', { 'class': 'label label-info' }, '连接中…')
-					: E('span', { 'class': 'label label-warning' }, '离线')));
-			lrow('IPv4 地址', (linkSt['ipv4-address'] || []).map(function(a) { return a.address; }).join(', ') || '-');
-			lrow('接口设备', linkSt.l3_device || linkSt.device || '-');
-			lrow('运行时间', linkSt.uptime != null ? '%d 秒'.format(linkSt.uptime) : '-');
-		}
-		else {
-			lrow('链路状态', E('span', { 'class': 'label' }, '未知'));
-		}
-
 		dom.content(this.statusBox, [
-			E('h3', {}, '链路状态（TR-069 / VLAN 3969）'),
-			E('table', { 'class': 'table' }, lrows),
 			E('h3', {}, '运行状态'),
 			E('table', { 'class': 'table' }, rows)
 		]);
