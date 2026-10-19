@@ -9,4 +9,12 @@ fi
 # 官方 init（rom 内 feed 包提供）设为开机自启
 /etc/init.d/baresip enable 2>/dev/null || true
 
+# 新增 SIP 通用参数的缺省值补齐（升级自旧版的设备没有这些选项）
+for kv in "sip_port 5060" "transport udp" "reg_port 5060" "ptime 20"; do
+	key=${kv%% *}
+	val=${kv#* }
+	uci -q get onu.ims."$key" >/dev/null 2>&1 || uci set onu.ims."$key"="$val"
+done
+uci commit onu 2>/dev/null || true
+
 exit 0

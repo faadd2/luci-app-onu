@@ -7,6 +7,7 @@
 'require ui';
 'require view';
 'require view.onu.tabs as tabs';
+'require view.onu.vlan as onuvlan';
 
 /* 共享主题样式 onu.css（暗色主题 label 徽标/表格标题行修复）；id 防重复 */
 if (!document.getElementById('onu-shared-css')) {
@@ -18,14 +19,9 @@ if (!document.getElementById('onu-shared-css')) {
 }
 
 /*
- * 上网业务模块（北京联通 10G-EPON）
- * 数据源：UCI network.wan（pppoe/dhcp over pon0.<vlan>）
+ * 上网业务模块（通用：PPPoE/DHCP over pon0.<vlan>）
+ * VLAN 编辑走 view.onu.vlan 共享模块（四连接同一模式）
  */
-
-function parseVid(device) {
-	var m = /^(pon0)\.(\d{1,4})$/.exec(device || '');
-	return m ? m[2] : '';
-}
 
 return view.extend({
 	load: function() {
@@ -60,17 +56,10 @@ return view.extend({
 		o.value('dhcp', 'DHCP 客户端');
 		o.depends('_enable', '1');
 
-		o = s.option(form.Value, '_vlan', '上网 VLAN ID');
+		o = onuvlan.addOption(s, 'wan', '上网 VLAN ID',
+			'运营商上网业务 VLAN（北京联通 3961）。修改会重建 pon0 子设备（保留原 MAC）并重新拨号');
 		o.placeholder = '3961';
-		o.datatype = 'range(1,4094)';
-		o.cfgvalue = function() { return parseVid(uci.get('network', 'wan', 'device')); };
-		o.write = function(sectionId, value) {
-			uci.set('network', 'wan', 'device', 'pon0.' + value);
-		};
-		o.remove = function() {};
 		o.depends('_enable', '1');
-		o.depends('proto', 'pppoe');
-		o.depends('proto', 'dhcp');
 
 		o = s.option(form.Value, 'username', 'PPPoE 账号');
 		o.depends('_enable', '1');

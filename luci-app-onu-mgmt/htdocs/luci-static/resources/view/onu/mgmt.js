@@ -4,8 +4,10 @@
 'require fs';
 'require poll';
 'require ui';
+'require uci';
 'require view';
 'require view.onu.tabs as tabs';
+'require view.onu.vlan as onuvlan';
 
 /* 共享主题样式 onu.css（暗色主题 label 徽标/表格标题行修复）；id 防重复 */
 if (!document.getElementById('onu-shared-css')) {
@@ -118,6 +120,41 @@ return view.extend({
 		o.placeholder = '3600';
 		o.depends('periodic_enable', '1');
 
+		/* ---- TR-069 拨号链路（network 配置，独立 Map） ---- */
+		var n = new form.Map('network', 'TR-069 拨号链路',
+			'CWMP 管理通道的数据链路：本机向 ACS 周期上报与 ACS 反向连接都经此 PPPoE 链路（北京联通 VLAN 3969，账号 bjcu-hgu@rms）。');
+		n.readonly = !L.hasViewPermission();
+
+		var ns = n.section(form.NamedSection, 'tr069', 'interface', 'TR-069 接口');
+		ns.addremove = false;
+
+		o = ns.option(form.Flag, '_enable', '启用 TR-069 链路');
+		o.cfgvalue = function() {
+			var p = uci.get('network', 'tr069', 'proto');
+			return (p && p !== 'none') ? '1' : '0';
+		};
+		o.write = function(sectionId, value) {
+			if (value !== '1') {
+				uci.set('network', 'tr069', 'proto', 'none');
+			}
+			else if (!uci.get('network', 'tr069', 'proto') || uci.get('network', 'tr069', 'proto') === 'none') {
+				uci.set('network', 'tr069', 'proto', 'pppoe');
+			}
+		};
+		o.remove = function() {};
+
+		o = ns.option(form.Value, 'username', 'PPPoE 账号');
+		o.depends('_enable', '1');
+
+		o = ns.option(form.Value, 'password', 'PPPoE 密码');
+		o.password = true;
+		o.depends('_enable', '1');
+
+		o = onuvlan.addOption(ns, 'tr069', 'TR-069 VLAN ID',
+			'运营商管理业务 VLAN（北京联通 3969）。修改会重建 pon0 子设备（保留原 MAC），保存后链路自动重拨');
+		o.placeholder = '3969';
+		o.depends('_enable', '1');
+
 		this.statusBox = E('div', { 'class': 'cbi-section' });
 		this.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'CWMP_INSTALLED', lines[4] !== 'ACS_OFF', parseIfstatus(statusText));
 		poll.add(function() { return self.refreshStatus(); }, 5);
@@ -157,16 +194,19 @@ return view.extend({
 			};
 			if (enInput) enInput.addEventListener('change', applyAcsVis);
 			applyAcsVis();
-			return E('div', {}, [
-				mapNode,
-				self.clientCard,
-				E('div', { 'class': 'cbi-page-actions' }, [
-					E('button', {
-						'class': 'cbi-button cbi-button-save',
-						'click': ui.createHandlerFn(self, 'saveAndRestart')
-					}, '保存并应用（按总开关启停客户端）')
-				])
-			]);
+			return n.render().then(function(netNode) {
+				return E('div', {}, [
+					mapNode,
+					netNode,
+					self.clientCard,
+					E('div', { 'class': 'cbi-page-actions' }, [
+						E('button', {
+							'class': 'cbi-button cbi-button-save',
+							'click': ui.createHandlerFn(self, 'saveAndRestart')
+						}, '保存并应用（按总开关启停客户端）')
+					])
+				]);
+			});
 		});
 
 		return tabs.render([

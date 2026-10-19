@@ -6,6 +6,7 @@
 'require ui';
 'require view';
 'require view.onu.tabs as tabs';
+'require view.onu.vlan as onuvlan';
 
 /* 共享主题样式 onu.css（暗色主题 label 徽标/表格标题行修复）；id 防重复 */
 if (!document.getElementById('onu-shared-css')) {
@@ -136,7 +137,12 @@ return view.extend({
 		o.description = '保持关闭，避免 IPTV 链路 DNS 污染本机解析';
 		o.depends('_enable', '1');
 
-		var o2 = s.option(form.Value, '_mvid', '组播 VLAN');
+		var o2 = onuvlan.addOption(s, 'iptv', 'IPTV VLAN ID',
+			'运营商 IPTV 业务 VLAN（北京联通 3964）。修改会重建 pon0 子设备（保留原 MAC），保存后需重载 IPTV 链路');
+		o2.placeholder = '3964';
+		o2.depends('_enable', '1');
+
+		o2 = s.option(form.Value, '_mvid', '组播 VLAN');
 		o2.datatype = 'range(1,4094)';
 		o2.placeholder = '4000';
 		o2.depends('_enable', '1');

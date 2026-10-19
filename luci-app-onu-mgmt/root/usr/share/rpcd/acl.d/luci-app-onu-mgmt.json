@@ -15,7 +15,7 @@
 			}
 		},
 		"write": {
-			"uci": [ "easycwmp", "acs" ],
+			"uci": [ "easycwmp", "acs", "network" ],
 			"ubus": {
 				"file": [ "exec", "write" ]
 			},

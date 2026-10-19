@@ -7,6 +7,7 @@
 'require uci';
 'require view';
 'require view.onu.tabs as tabs';
+'require view.onu.vlan as onuvlan';
 'require onu.phone-loc2 as phoneloc';
 
 /* 共享主题样式 onu.css（暗色主题 label 徽标/表格标题行修复）；id 防重复 */
@@ -72,6 +73,11 @@ return view.extend({
 		o.description = '语音链路不应作为默认网关（保持关闭）';
 		o.depends('_enable', '1');
 
+		o = onuvlan.addOption(s, 'voip', '语音 VLAN ID',
+			'运营商语音业务 VLAN（北京联通 3010）。修改会重建 pon0 子设备（保留原 MAC），保存后需重新应用 SIP');
+		o.placeholder = '3010';
+		o.depends('_enable', '1');
+
 		/* ---- IMS 静态路由（独立 Map，渲染在账号参数之后，整体受主开关控制） ---- */
 		var r = new form.Map('network', 'IMS 静态路由',
 			'IMS 语音代理网段经 voip 接口的静态路由（北京联通：10.203.255.0/24，网关 10.143.218.1）。');
@@ -91,7 +97,7 @@ return view.extend({
 
 		/* ---- SIP 账号 ---- */
 		var a = new form.Map('onu', 'IMS 账号（SIP 注册）',
-			'账号从原光猫备份提取。应用后自动生成 baresip 配置（固定源端口 5060 + 完整 SIP ID，北京联通 SBC 强制要求）并重启服务。');
+			'账号从原光猫备份提取。应用后自动生成 baresip 配置（完整 SIP ID 为认证名，源端口/代理端口/传输协议见下方参数）并重启服务。');
 		a.readonly = !L.hasViewPermission();
 
 		var ims = a.section(form.NamedSection, 'ims', 'onu_ims', '账号参数');
@@ -114,6 +120,29 @@ return view.extend({
 		o = ims.option(form.Value, 'reg_period', '注册周期（秒）');
 		o.datatype = 'uinteger';
 		o.default = '3600';
+
+		o = ims.option(form.Value, 'sip_port', 'SIP 源端口');
+		o.datatype = 'port';
+		o.placeholder = '5060';
+		o.description = '本机 SIP 监听/源端口。北京联通 SBC 要求固定 5060（随机端口会被静默丢弃）；其他运营商可改。填 0 = 不绑定（随机端口）';
+
+		o = ims.option(form.ListValue, 'transport', 'SIP 传输协议');
+		o.value('udp', 'UDP');
+		o.value('tcp', 'TCP');
+		o.value('tls', 'TLS');
+		o.default = 'udp';
+
+		o = ims.option(form.Value, 'reg_port', '代理端口');
+		o.datatype = 'port';
+		o.placeholder = '5060';
+		o.description = '注册代理（registrar）端口，缺省 5060';
+
+		o = ims.option(form.ListValue, 'ptime', '语音包长（ms）');
+		o.value('10', '10');
+		o.value('20', '20');
+		o.value('30', '30');
+		o.value('40', '40');
+		o.default = '20';
 
 		/* ---- 本机黄页（软话机标签内，与软话机设置放在一起） ---- */
 		var pbm = new form.Map('onu', '本机黄页',
