@@ -48,7 +48,8 @@ return view.extend({
 		m.readonly = !L.hasViewPermission();
 
 		var s = m.section(form.TypedSection, 'local', '本机监听（ConnectionRequest）',
-			'ACS 反向主动连接光猫时使用的 HTTP 端口与认证');
+			'「监听接口 / 监听端口」决定 ACS 主动连接光猫时连到哪个地址；「ConnectionRequest 用户名 / 密码」是连接到达后光猫要求 ACS 出示的认证口令（认证方向：ACS → 光猫）。' +
+			'对照上方「ACS 服务器」里的 ACS 用户名 / 密码：那是光猫周期性向 ACS 上报时光猫自己出示的凭据（方向：光猫 → ACS）。两组凭据方向相反，用途不同，请勿填混。');
 		s.anonymous = true;
 		s.addremove = false;
 
@@ -56,18 +57,32 @@ return view.extend({
 			'总开关：关闭后 easycwmpd 服务停用、全部参数隐藏');
 		o.default = '1';
 
-		o = s.option(form.Flag, 'enable', '启用本机监听');
+		o = s.option(form.Flag, 'enable', '启用本机监听',
+			'开启后光猫在本机监听端口上等待 ACS 的反向连接请求（ConnectionRequest）');
 		o.depends('enable_acs', '1');
 
-		o = s.option(form.Value, 'interface', '监听接口');
+		o = s.option(form.Value, 'interface', '监听接口',
+			'CWMP 监听绑定的接口（留空 = 全部接口）。ACS 主动连接时连到该接口的 IP 上');
 		o.placeholder = 'wan / voip / 留空全部';
 		o.rmempty = true;
 		o.depends('enable', '1');
 		o.depends('enable_acs', '1');
-		o = s.option(form.Value, 'port', '监听端口');
+		o = s.option(form.Value, 'port', '监听端口',
+			'ACS 反向连接的 HTTP 端口，缺省 7547；运营商用 9090 时填 9090');
 		o.datatype = 'port';
 		o.placeholder = '7547';
 		o.depends('enable', '1');
+		o.depends('enable_acs', '1');
+
+		o = s.option(form.Value, 'username', 'ConnectionRequest 用户名',
+			'ACS 主动连接光猫时，光猫要求其通过的 HTTP 认证用户名（ACS → 光猫 方向）');
+		o.rmempty = true;
+		o.depends('enable_acs', '1');
+
+		o = s.option(form.Value, 'password', 'ConnectionRequest 密码',
+			'与用户名配套的认证密码；与「ACS 服务器」段的 ACS 密码方向相反、互不相同');
+		o.password = true;
+		o.rmempty = true;
 		o.depends('enable_acs', '1');
 
 		var a = m.section(form.TypedSection, 'acs', 'ACS 服务器');
@@ -78,10 +93,12 @@ return view.extend({
 		o.placeholder = 'http://acs.example.com:7547/';
 		o.rmempty = true;
 
-		o = a.option(form.Value, 'username', 'ACS 用户名');
+		o = a.option(form.Value, 'username', 'ACS 用户名',
+			'光猫向 ACS 上报时出示的认证用户名（方向：光猫 → ACS）');
 		o.rmempty = true;
 
-		o = a.option(form.Value, 'password', 'ACS 密码');
+		o = a.option(form.Value, 'password', 'ACS 密码',
+			'与 ACS 用户名配套；不是下方 ConnectionRequest 的那组，两者方向相反');
 		o.password = true;
 		o.rmempty = true;
 
@@ -114,6 +131,11 @@ return view.extend({
 			'style': 'max-height: 18em; overflow: auto; margin: 0.5rem 1rem 1rem; padding: 0.5em; ' +
 				'background: rgba(127,127,127,0.08); font-size: 0.8125rem; white-space: pre-wrap;'
 		}, '点击「刷新日志」加载。');
+
+		this.captureLog = E('pre', {
+			'style': 'max-height: 18em; overflow: auto; margin: 0.5rem 1rem 1rem; padding: 0.5em; ' +
+				'background: rgba(127,127,127,0.08); font-size: 0.8125rem; white-space: pre-wrap;'
+		}, '尚未开始抓包。');
 
 		var cfgPane = m.render().then(function(mapNode) {
 			/* 总开关折叠：enable_acs 在 local 段，acs 段的选项 depends 无法跨段引用，手动隐藏 */
@@ -160,6 +182,12 @@ return view.extend({
 						]),
 						E('p', { 'class': 'cbi-section-descr' },
 							'在 PON 口抓取 CWMP 会话报文。下发配置解析前的原始数据来源；EPON OAM/CTC 通道抓包见「光路诊断」页。')
+					]),
+					E('div', { 'class': 'cbi-section' }, [
+						E('h3', {}, '抓取原始记录'),
+						E('p', { 'class': 'cbi-section-descr' },
+							'tcpdump 实时输出与抓包统计（每 5 秒自动刷新；停止抓包后此处显示包数摘要）。'),
+						self.captureLog
 					]),
 					E('div', { 'class': 'cbi-section' }, [
 						E('h3', {}, 'ACS 客户端安装'),
@@ -235,6 +263,15 @@ return view.extend({
 		]), '').then(function(text) {
 			var lines = String(text || '').split('\n');
 			self.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'CWMP_INSTALLED', lines[4] !== 'ACS_OFF');
+		}).then(function() {
+			if (!self.captureLog || !self.captureLog.isConnected)
+				return;
+			return fs.exec_direct('/bin/sh', ['-c',
+				'echo "— tcpdump 输出 —"; tail -n 8 ' + CLOG + ' 2>/dev/null; ' +
+				'[ -f ' + PCAP + ' ] && echo "— 已抓取 $(wc -c < ' + PCAP + ') 字节（PCAP）—" || echo "— 尚无 PCAP 文件 —"'
+			]).then(function(out) {
+				self.captureLog.textContent = (out || '').trim() || '尚未开始抓包。';
+			});
 		});
 	},
 
