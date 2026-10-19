@@ -330,41 +330,49 @@
 }
 
 /*
- * 软话机拨号键盘（2026-10-19）：4 列 x 3 行，* 0 # 末列竖排。
- * Argon 对裸 table 有 element 级规则（width:100%、border-top !important、
- * 隔行底色），此处必须以 !important 全覆盖，保证键盘紧凑无框线。
+ * 软话机拨号键盘（2026-10-19 重写）：div + CSS Grid，3 列 x 4 行标准电话序。
+ * 弃用旧 table 实现——LuCI 全局 table 规则（width:100%、border-top !important、
+ * 隔行底色）与之反复冲突；div 无全局样式，Grid 保证等宽对齐。设计参考：
+ * docs/软话机键盘设计参考_20261019.md（Twilio/jsSIP/CSS Grid 三来源）。
  */
 .onu-keypad {
-	width: auto !important;
-	font-size: 1rem !important;
-	border-collapse: separate !important;
-	border-spacing: 4px !important;
-	margin-top: 0.5em !important;
-	background: transparent !important;
-	box-shadow: none !important;
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 0.55rem;
+	max-width: 15rem;
+	margin-top: 0.75em;
 }
 
-.onu-keypad tbody,
-.onu-keypad tr,
-.onu-keypad td {
-	background: transparent !important;
-	border: none !important;
-	box-shadow: none !important;
-}
-
-.onu-keypad td {
-	padding: 0 !important;
-	line-height: 0;
-}
-
-.onu-keypad .cbi-button {
-	display: inline-block;
-	box-sizing: border-box;
-	width: 3.4em;
-	height: 2.4em;
-	margin: 0;
+.onu-keypad-key {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	width: 3.4rem;
+	height: 3.4rem;
+	margin: 0 auto;
 	padding: 0;
-	font-size: 1.05rem;
-	text-align: center;
-	line-height: 2.4em;
+	border: none;
+	border-radius: 50%;
+	background: var(--secondary, #f6f9fc);
+	color: var(--text-color, #32325d);
+	cursor: pointer;
+	font-family: inherit;
+}
+
+.onu-keypad-key:active {
+	background: var(--border-color, #dee2e6);
+}
+
+.onu-keypad-num {
+	font-size: 1.25rem;
+	font-weight: 600;
+	line-height: 1.1;
+}
+
+.onu-keypad-sub {
+	font-size: 0.58rem;
+	letter-spacing: 0.08em;
+	line-height: 1;
+	opacity: 0.6;
 }

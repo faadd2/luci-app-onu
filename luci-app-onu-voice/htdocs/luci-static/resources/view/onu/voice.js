@@ -396,22 +396,31 @@ return view.extend({
 	/* ---------- 软话机 ---------- */
 
 	buildKeypad: function() {
-		/* 4x3 表格布局：末列 * 0 # 竖排（1 2 3 * / 4 5 6 0 / 7 8 9 #），单元格等宽强制对齐 */
-		var rows = [['1','2','3','*'],['4','5','6','0'],['7','8','9','#']];
-		var input = function() { return document.getElementById('onu-voice-phone-num'); };
-		return E('table', { 'class': 'onu-keypad' },
-			rows.map(function(r) {
-				return E('tr', {}, r.map(function(k) {
-					return E('td', {},
-						E('button', {
-							'class': 'cbi-button',
-							'click': function() {
-								var el = input();
-								if (el) el.value = (el.value || '') + k;
-							}
-						}, k));
-				}));
+		/* div+CSS Grid 布局（弃 table：LuCI 全局 table 规则与之冲突，详见 docs/软话机键盘设计参考）。
+		   标准电话序 3x4，圆形键，数字+字母副标（仿 iOS 拨号盘） */
+		var keys = [
+			['1', ''], ['2', 'ABC'], ['3', 'DEF'],
+			['4', 'GHI'], ['5', 'JKL'], ['6', 'MNO'],
+			['7', 'PQRS'], ['8', 'TUV'], ['9', 'WXYZ'],
+			['*', ''], ['0', '+'], ['#', '']
+		];
+		var self = this;
+		return E('div', { 'class': 'onu-keypad' },
+			keys.map(function(kv) {
+				return E('button', {
+					'class': 'onu-keypad-key',
+					'type': 'button',
+					'click': ui.createHandlerFn(self, 'keypadPress', kv[0])
+				}, [
+					E('span', { 'class': 'onu-keypad-num' }, kv[0]),
+					kv[1] ? E('span', { 'class': 'onu-keypad-sub' }, kv[1]) : null
+				]);
 			}));
+	},
+
+	keypadPress: function(k) {
+		var el = document.getElementById('onu-voice-phone-num');
+		if (el) el.value = (el.value || '') + k;
 	},
 
 	phoneCmd: function(args, okMsg) {
