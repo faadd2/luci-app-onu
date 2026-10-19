@@ -300,7 +300,7 @@ return view.extend({
 				return fs.exec_direct('/usr/libexec/onu-voice-apply', []).then(function(out) {
 					var res = {};
 					try { res = JSON.parse(out); } catch (e) { res = { ok: false, msg: out }; }
-					ui.addNotification(null, E('p', {}, 'SIP：' + (res.msg || '已应用')), res.ok ? 'info' : 'warning');
+					ui.addNotification(null, E('p', {}, 'SIP：' + (res.msg || '已应用') + (res.ok ? '，配置生效需数秒。' : '')), res.ok ? 'info' : 'warning');
 					this.refreshStatus();
 				}.bind(this));
 			}.bind(this));

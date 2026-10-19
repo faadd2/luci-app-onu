@@ -197,7 +197,7 @@ return view.extend({
 				return L.resolveDefault(fs.exec_direct('/sbin/ifup', ['wan']), '');
 			})
 			.then(function() {
-				ui.addNotification(null, E('p', {}, '已保存并触发重新拨号，约 10 秒后刷新状态。'), 'info');
+				ui.addNotification(null, E('p', {}, '已保存并触发重新拨号，配置生效需数秒，约 10 秒后自动刷新状态。'), 'info');
 				setTimeout(function() { self.refreshStatus(); }, 10000);
 			})
 			.catch(function(err) {

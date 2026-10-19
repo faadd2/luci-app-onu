@@ -395,7 +395,7 @@ return view.extend({
 			})
 			.then(function(out) {
 				ui.addNotification(null, E('p', {},
-					/RESULT_ENABLED/.test(out || '') ? '已保存并重启 easycwmpd。' : '已保存，ACS 客户端已停用并取消自启。'), 'info');
+					/RESULT_ENABLED/.test(out || '') ? '已保存并重启 easycwmpd，配置生效需数秒。' : '已保存，ACS 客户端已停用并取消自启。'), 'info');
 				return this.refreshStatus();
 			}.bind(this))
 			.catch(function(err) {
@@ -413,7 +413,7 @@ return view.extend({
 	captureAction: function(action) {
 		var cmd;
 		if (action === 'start')
-			cmd = 'rm -f ' + PCAP + ' ' + CLOG + '; /usr/bin/tcpdump -i pon0 -s 0 -nn -w ' + PCAP +
+			cmd = 'rm -f ' + PCAP + ' ' + CLOG + '; /usr/bin/tcpdump -i pppoe-tr069 -s 0 -nn -w ' + PCAP +
 				' "port 7547 or port 9090" > ' + CLOG + ' 2>&1 & echo $! > ' + CPID;
 		else
 			cmd = 'kill "$(cat ' + CPID + ' 2>/dev/null)" 2>/dev/null; rm -f ' + CPID;

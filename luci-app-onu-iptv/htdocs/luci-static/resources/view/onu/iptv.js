@@ -412,7 +412,7 @@ return view.extend({
 			.then(function() { return L.resolveDefault(fs.exec_direct('/sbin/ifdown', ['iptv']), ''); })
 			.then(function() { return L.resolveDefault(fs.exec_direct('/sbin/ifup', ['iptv']), ''); })
 			.then(function() {
-				ui.addNotification(null, E('p', {}, '已保存并重启 IPTV 接口。'), 'info');
+				ui.addNotification(null, E('p', {}, '已保存并重启 IPTV 接口，配置生效需数秒。'), 'info');
 				setTimeout(function() { self.refreshStatus(); }, 8000);
 			})
 			.catch(function(err) {
