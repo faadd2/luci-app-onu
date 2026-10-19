@@ -7,7 +7,7 @@
 'require ui';
 'require view';
 'require view.onu.tabs as tabs';
-'require view.onu.vlan as onuvlan';
+'require onu.vlan as onuvlan';
 
 /* 共享主题样式 onu.css（暗色主题 label 徽标/表格标题行修复）；id 防重复 */
 if (!document.getElementById('onu-shared-css')) {
