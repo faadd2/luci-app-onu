@@ -28,6 +28,14 @@ var PCAP = '/tmp/acs-capture.pcap';
 var CLOG = '/tmp/acs-capture.log';
 var CPID = '/tmp/acs-capture.pid';
 
+/* 从 load/refresh 的输出里解析 ifstatus <iface> 的 JSON 段（IFSTATUS_BEGIN/END 包裹） */
+function parseIfstatus(text) {
+	var m = String(text || '').match(/IFSTATUS_BEGIN([\s\S]*?)IFSTATUS_END/);
+	if (!m)
+		return null;
+	try { return JSON.parse(m[1]) || {}; } catch (e) { return null; }
+}
+
 return view.extend({
 	load: function() {
 		return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c',
@@ -35,7 +43,8 @@ return view.extend({
 			'pidof easycwmpd easycwmp 2>/dev/null | tr "\\n" " "; echo; ' +
 			'kill -0 "$(cat ' + CPID + ' 2>/dev/null)" 2>/dev/null && echo RUNNING || echo STOPPED; ' +
 			'command -v easycwmpd >/dev/null 2>&1 && echo CWMP_INSTALLED || echo CWMP_MISSING; ' +
-			'[ "$(uci -q get easycwmp.@local[0].enable_acs)" = "0" ] && echo ACS_OFF || echo ACS_ON'
+			'[ "$(uci -q get easycwmp.@local[0].enable_acs)" = "0" ] && echo ACS_OFF || echo ACS_ON; ' +
+			'echo IFSTATUS_BEGIN; /sbin/ifstatus tr069 2>/dev/null; echo IFSTATUS_END'
 		]), '\n\nSTOPPED\nCWMP_MISSING\nACS_ON');
 	},
 
@@ -110,7 +119,7 @@ return view.extend({
 		o.depends('periodic_enable', '1');
 
 		this.statusBox = E('div', { 'class': 'cbi-section' });
-		this.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'CWMP_INSTALLED', lines[4] !== 'ACS_OFF');
+		this.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'CWMP_INSTALLED', lines[4] !== 'ACS_OFF', parseIfstatus(statusText));
 		poll.add(function() { return self.refreshStatus(); }, 5);
 
 		/* ---- 推荐客户端卡片 ---- */
@@ -217,7 +226,7 @@ return view.extend({
 		});
 	},
 
-	renderStatus: function(enEnabled, pids, capturing, installed, acsOn) {
+	renderStatus: function(enEnabled, pids, capturing, installed, acsOn, linkSt) {
 		var rows = [];
 		function row(k, v) {
 			rows.push(E('tr', { 'class': 'tr' }, [
@@ -246,7 +255,32 @@ return view.extend({
 			this.clientBadge.className = installed ? 'label label-success' : 'label label-warning';
 			this.clientBadge.textContent = installed ? '已安装（推荐）' : '未安装（推荐安装）';
 		}
+
+		/* ---- TR-069 拨号链路状态（与上网/IPTV/语音页对齐） ---- */
+		var lrows = [];
+		function lrow(k, v) {
+			lrows.push(E('tr', { 'class': 'tr' }, [
+				E('td', { 'class': 'td left', 'style': 'width: 30%' }, k),
+				E('td', { 'class': 'td left' }, v == null || v === '' ? '-' : v)
+			]));
+		}
+		if (linkSt) {
+			lrow('链路状态', linkSt.up
+				? E('span', { 'class': 'label label-success' }, '在线')
+				: (linkSt.pending
+					? E('span', { 'class': 'label label-info' }, '连接中…')
+					: E('span', { 'class': 'label label-warning' }, '离线')));
+			lrow('IPv4 地址', (linkSt['ipv4-address'] || []).map(function(a) { return a.address; }).join(', ') || '-');
+			lrow('接口设备', linkSt.l3_device || linkSt.device || '-');
+			lrow('运行时间', linkSt.uptime != null ? '%d 秒'.format(linkSt.uptime) : '-');
+		}
+		else {
+			lrow('链路状态', E('span', { 'class': 'label' }, '未知'));
+		}
+
 		dom.content(this.statusBox, [
+			E('h3', {}, '链路状态（TR-069 / VLAN 3969）'),
+			E('table', { 'class': 'table' }, lrows),
 			E('h3', {}, '运行状态'),
 			E('table', { 'class': 'table' }, rows)
 		]);
@@ -259,10 +293,11 @@ return view.extend({
 			'pidof easycwmpd easycwmp 2>/dev/null | tr "\\n" " "; echo; ' +
 			'kill -0 "$(cat ' + CPID + ' 2>/dev/null)" 2>/dev/null && echo RUNNING || echo STOPPED; ' +
 			'command -v easycwmpd >/dev/null 2>&1 && echo CWMP_INSTALLED || echo CWMP_MISSING; ' +
-			'[ "$(uci -q get easycwmp.@local[0].enable_acs)" = "0" ] && echo ACS_OFF || echo ACS_ON'
+			'[ "$(uci -q get easycwmp.@local[0].enable_acs)" = "0" ] && echo ACS_OFF || echo ACS_ON; ' +
+			'echo IFSTATUS_BEGIN; /sbin/ifstatus tr069 2>/dev/null; echo IFSTATUS_END'
 		]), '').then(function(text) {
 			var lines = String(text || '').split('\n');
-			self.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'CWMP_INSTALLED', lines[4] !== 'ACS_OFF');
+			self.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'CWMP_INSTALLED', lines[4] !== 'ACS_OFF', parseIfstatus(text));
 		}).then(function() {
 			if (!self.captureLog || !self.captureLog.isConnected)
 				return;
