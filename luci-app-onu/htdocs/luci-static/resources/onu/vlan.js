@@ -1,4 +1,5 @@
 'use strict';
+'require baseclass';
 'require form';
 'require uci';
 
@@ -8,10 +9,13 @@
  * 新建 pon0_<vid> 段（继承原段 MAC 地址）、接口 device 指向新设备名、删除旧段。
  * 保存走 LuCI 统一 uci.apply() 触发 network reload，无后端脚本。
  *
+ * 注意：本 LuCI 的模块加载器会对导出执行 new（phone-loc2 同款约束），
+ * 必须导出 baseclass.extend 类，不能导出纯对象。
+ *
  * addOption(section, iface, label, descr) — section 为该接口的 form.NamedSection
  * 返回 form.Value 选项（调用方可追加 placeholder/depends 等）
  */
-return {
+return baseclass.extend({
 	addOption: function(s, iface, label, descr) {
 		function parseVid(device) {
 			var m = /^(pon0)\.(\d{1,4})$/.exec(device || '');
@@ -51,4 +55,4 @@ return {
 		o.remove = function() {};
 		return o;
 	}
-};
+});
