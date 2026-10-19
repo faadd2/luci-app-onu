@@ -60,8 +60,11 @@ return view.extend({
 		try { lease = JSON.parse(ifText) || {}; } catch (e) {}
 		var leaseIp = ((lease['ipv4-address'] || [])[0] || {}).address || '';
 		var leaseMask = prefixToMask(((lease['ipv4-address'] || [])[0] || {}).mask);
-		/* 运营商下发的默认网关/DNS 因 defaultroute/peerdns=0 落在 inactive 段，仍取来回填 */
+		/* 默认网关可能落在激活段（下发即生效）或 inactive 段（defaultroute=0 被抑制），两处都取 */
 		var leaseGw = '';
+		((lease.route) || []).forEach(function(rt) {
+			if (!leaseGw && rt.nexthop) leaseGw = rt.nexthop;
+		});
 		(((lease.inactive || {}).route) || []).forEach(function(rt) {
 			if (!leaseGw && rt.nexthop) leaseGw = rt.nexthop;
 		});
