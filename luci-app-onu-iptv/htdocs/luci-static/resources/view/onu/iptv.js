@@ -2,6 +2,7 @@
 'require dom';
 'require form';
 'require fs';
+'require poll';
 'require uci';
 'require ui';
 'require view';
