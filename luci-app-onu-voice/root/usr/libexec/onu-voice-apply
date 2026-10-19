@@ -34,6 +34,8 @@ cat > /root/.baresip/config <<EOF
 module_path		/usr/lib/baresip/modules
 module		account.so
 module		g711.so
+module		menu.so
+module		stdio.so
 audio_player		null,null
 audio_source		null,null
 audio_alert		null,null
