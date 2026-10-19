@@ -38,6 +38,15 @@ function parseIfstatus(text) {
 	try { return JSON.parse(m[1]) || {}; } catch (e) { return null; }
 }
 
+/* uci.apply 安全封装：无改动时 ubus 返回 NO_DATA（无已接收数据），正常空操作不中断保存链 */
+function applyUci() {
+	return uci.apply().catch(function(err) {
+		if (err && /NO_DATA|无已接收数据/.test(String(err.message)))
+			return null;
+		throw err;
+	});
+}
+
 return view.extend({
 	load: function() {
 		return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c',
@@ -57,6 +66,8 @@ return view.extend({
 		var m = new form.Map('easycwmp', 'ACS 配置',
 			'TR-069（CWMP）是运营商远程管理光猫的通道：光猫周期性向 ACS 上报，ACS 可反向下发或修改配置（北京联通的 PPPoE / IPTV / VoIP 业务参数均通过该通道下发）。');
 		m.readonly = !L.hasViewPermission();
+
+		this.mapM = m;
 
 		var s = m.section(form.TypedSection, 'local', '本机监听（ConnectionRequest）',
 			'「监听接口 / 监听端口」决定 ACS 主动连接光猫时连到哪个地址；「ConnectionRequest 用户名 / 密码」是连接到达后光猫要求 ACS 出示的认证口令（认证方向：ACS → 光猫）。' +
@@ -124,6 +135,7 @@ return view.extend({
 		var n = new form.Map('network', 'TR-069 拨号链路',
 			'CWMP 管理通道的数据链路：本机向 ACS 周期上报与 ACS 反向连接都经此 PPPoE 链路（北京联通 VLAN 3969，账号 bjcu-hgu@rms）。');
 		n.readonly = !L.hasViewPermission();
+		this.mapN = n;
 
 		var ns = n.section(form.NamedSection, 'tr069', 'interface', 'TR-069 接口');
 		ns.addremove = false;
@@ -371,8 +383,10 @@ return view.extend({
 	},
 
 	saveAndRestart: function() {
-		var map = document.querySelector('.cbi-map');
-		return dom.callClassMethod(map, 'save')
+		var self = this;
+		return this.mapM.save()
+			.then(function() { return self.mapN.save(); })
+			.then(applyUci)
 			.then(function() {
 				return fs.exec_direct('/bin/sh', ['-c',
 					'if [ "$(uci -q get easycwmp.@local[0].enable_acs)" = "0" ]; then ' +

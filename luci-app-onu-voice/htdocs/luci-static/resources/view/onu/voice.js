@@ -27,6 +27,15 @@ if (!document.getElementById('onu-shared-css')) {
 
 var IMS_PROXIES = ['10.203.255.17', '10.203.255.1'];
 
+/* uci.apply 安全封装：无改动时 ubus 返回 NO_DATA（无已接收数据），正常空操作不中断保存链 */
+function applyUci() {
+	return uci.apply().catch(function(err) {
+		if (err && /NO_DATA|无已接收数据/.test(String(err.message)))
+			return null;
+		throw err;
+	});
+}
+
 return view.extend({
 	load: function() {
 		return Promise.all([
@@ -286,7 +295,7 @@ return view.extend({
 
 	handleSaveAndApply: function() {
 		return uci.save()
-			.then(function() { return uci.apply(); })
+			.then(applyUci)
 			.then(function() {
 				return fs.exec_direct('/usr/libexec/onu-voice-apply', []).then(function(out) {
 					var res = {};

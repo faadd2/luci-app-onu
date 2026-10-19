@@ -20,8 +20,18 @@ if (!document.getElementById('onu-shared-css')) {
 
 /*
  * 上网业务模块（通用：PPPoE/DHCP over pon0.<vlan>）
- * VLAN 编辑走 view.onu.vlan 共享模块（四连接同一模式）
+ * VLAN 编辑走 onu.vlan 共享模块（四连接同一模式）
  */
+
+/* uci.apply 安全封装：无改动时 ubus 返回 NO_DATA（uci/apply failed: 无已接收数据），
+ * 这是正常空操作，不应中断保存链（LuCI 26 实证） */
+function applyUci() {
+	return uci.apply().catch(function(err) {
+		if (err && /NO_DATA|无已接收数据/.test(String(err.message)))
+			return null;
+		throw err;
+	});
+}
 
 return view.extend({
 	load: function() {
@@ -86,6 +96,7 @@ return view.extend({
 		o.depends('_enable', '1');
 
 		var self = this;
+		this.map = m;
 		var statusBox = E('div', { 'class': 'cbi-section' }, [E('h3', {}, '连接状态'), E('p', {}, '加载中…')]);
 
 		this.statusBox = statusBox;
@@ -176,9 +187,9 @@ return view.extend({
 	},
 
 	reconnect: function() {
-		var map = document.querySelector('.cbi-map');
 		var self = this;
-		return dom.callClassMethod(map, 'save')
+		return this.map.save()
+			.then(applyUci)
 			.then(function() {
 				return L.resolveDefault(fs.exec_direct('/sbin/ifdown', ['wan']), '');
 			})
