@@ -1,29 +1,34 @@
 #!/bin/sh /etc/rc.common
-# onu-acscap — ACS (TR-069) 蹲守抓包开机自启
-# 启用后开机自动抓 pppoe-tr069 上 7547/9090 流量，写入 /root/pcaps/（重启不丢），
-# 用于蹲守运营商 ACS 配置下发。页面：oun > ACS 管理 > 调试 > 开机自启蹲守抓包。
+# onu-acscap — ACS (TR-069) 抓包服务（手动抓包与开机自启蹲守共用同一引擎）
+#  - 持久化探针: tcpdump -w /root/pcaps/acs-<时间戳>.pcap（重启不丢，每次启动新文件）
+#  - 显示探针:  tcpdump -l 文本输出 → /tmp/acs-capture.log（管理页"抓取原始记录"滚动数据源）
+#  - 页面: oun > ACS 管理 > 调试 > 报文抓取（开始/停止/下载 + 开机自启勾选）
 START=98
 STOP=10
 
 PIDFILE=/run/onu-acscap.pid
+DPIDFILE=/run/onu-acscap-display.pid
+CLOG=/tmp/acs-capture.log
 IFACE=pppoe-tr069
 FILTER="port 7547 or port 9090"
+PCAP_DIR=/root/pcaps
 
 start() {
-    mkdir -p /root/pcaps
-    # 已在跑则跳过（幂等）
-    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    mkdir -p "$PCAP_DIR"
+    if [ -s "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
         return 0
     fi
-    local f="/root/pcaps/acs-auto-$(date +%Y%m%d_%H%M%S).pcap"
-    setsid /usr/bin/tcpdump -i "$IFACE" -s 0 -nn -w "$f" "$FILTER" \
+    local f="$PCAP_DIR/acs-$(date +%Y%m%d_%H%M%S).pcap"
+    setsid /usr/bin/tcpdump -i "$IFACE" -s 0 -nn -U -w "$f" "$FILTER" \
         >/dev/null 2>&1 </dev/null &
     echo $! > "$PIDFILE"
+    rm -f "$CLOG"
+    setsid /usr/bin/tcpdump -i "$IFACE" -s 0 -nn -l "$FILTER" \
+        > "$CLOG" 2>/dev/null </dev/null &
+    echo $! > "$DPIDFILE"
 }
 
 stop() {
-    if [ -f "$PIDFILE" ]; then
-        kill "$(cat "$PIDFILE")" 2>/dev/null
-        rm -f "$PIDFILE"
-    fi
+    [ -f "$PIDFILE" ] && { kill "$(cat "$PIDFILE")" 2>/dev/null; rm -f "$PIDFILE"; }
+    [ -f "$DPIDFILE" ] && { kill "$(cat "$DPIDFILE")" 2>/dev/null; rm -f "$DPIDFILE"; }
 }

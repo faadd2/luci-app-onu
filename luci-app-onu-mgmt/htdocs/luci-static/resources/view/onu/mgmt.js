@@ -26,7 +26,7 @@ if (!document.getElementById('onu-shared-css')) {
  * 待办：下发包解析并自动应用联通下发配置
  */
 
-var PCAP = '/tmp/acs-capture.pcap';
+var CLOG = '/tmp/acs-capture.log';
 
 /* 从 load/refresh 的输出里解析 ifstatus <iface> 的 JSON 段（IFSTATUS_BEGIN/END 包裹） */
 function parseIfstatus(text) {
@@ -50,13 +50,14 @@ return view.extend({
 		return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c',
 			'/etc/init.d/easycwmpd enabled && echo EN_ENABLED || echo EN_DISABLED; ' +
 			'pidof easycwmpd easycwmp 2>/dev/null | tr "\\n" " "; echo; ' +
-			'/usr/libexec/onu-acscap status 2>/dev/null | grep -q "^RUNNING" && echo RUNNING || echo STOPPED; ' +
+			'[ -f /run/onu-acscap.pid ] && kill -0 "$(cat /run/onu-acscap.pid)" 2>/dev/null && echo RUNNING || echo STOPPED; ' +
+			'/etc/init.d/onu-acscap enabled >/dev/null 2>&1 && echo AUTO_EN || echo AUTO_DIS; ' +
 			'command -v easycwmpd >/dev/null 2>&1 && echo CWMP_INSTALLED || echo CWMP_MISSING; ' +
 			'[ "$(uci -q get easycwmp.@local[0].enable_acs)" = "0" ] && echo ACS_OFF || echo ACS_ON; ' +
 			'command -v easycwmp >/dev/null 2>&1 && { echo ID_BEGIN; easycwmp inform device_id 2>/dev/null; echo ID_END; }; ' +
 			'grep -q disguise-B /etc/init.d/easycwmpd 2>/dev/null && echo PATCH_ON || echo PATCH_OFF; ' +
 			'echo IFSTATUS_BEGIN; /sbin/ifstatus tr069 2>/dev/null; echo IFSTATUS_END'
-		]), '\n\nSTOPPED\nCWMP_MISSING\nACS_ON');
+		]), '\n\nSTOPPED\nAUTO_DIS\nCWMP_MISSING\nACS_ON');
 	},
 
 	render: function(statusText) {
@@ -202,7 +203,7 @@ return view.extend({
 		o.depends('_enable', '1');
 
 		this.statusBox = E('div', { 'class': 'cbi-section' });
-		this.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'CWMP_INSTALLED', lines[4] !== 'ACS_OFF', parseIfstatus(statusText));
+		this.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'AUTO_EN', lines[4] === 'CWMP_INSTALLED', lines[5] !== 'ACS_OFF', parseIfstatus(statusText));
 		poll.add(function() { return self.refreshStatus(); }, 5);
 
 		/* ---- 身份页：去回填补丁状态 + 当前上报身份回读 ---- */
@@ -299,45 +300,35 @@ return view.extend({
 				name: '调试', content: E('div', {}, [
 					E('div', { 'class': 'cbi-section' }, [
 						E('h3', {}, '报文抓取（TR-069 端口 7547/9090）'),
-						E('div', { 'class': 'cbi-page-actions' }, [
-							E('button', {
-								'class': 'cbi-button cbi-button-action',
-								'click': ui.createHandlerFn(self, 'captureAction', 'start')
-							}, '开始抓包'),
-							E('button', {
-								'class': 'cbi-button cbi-button-negative',
-								'click': ui.createHandlerFn(self, 'captureAction', 'stop')
-							}, '停止抓包'),
-							E('button', {
-								'class': 'cbi-button',
-								'click': ui.createHandlerFn(self, 'downloadPcap')
-							}, '下载 PCAP')
-						]),
-						E('p', { 'class': 'cbi-section-descr' },
-							'在 PON 口抓取 CWMP 会话报文。下发配置解析前的原始数据来源；EPON OAM/CTC 通道抓包见「光路诊断」页。'),
-						E('h3', {}, '开机自启蹲守抓包'),
-						E('div', { 'class': 'cbi-page-actions' }, [
-							E('button', {
-								'class': 'cbi-button cbi-button-action',
-								'click': ui.createHandlerFn(self, 'autoCapAction', 'start')
-							}, '启用并立即开始'),
-							E('button', {
-								'class': 'cbi-button cbi-button-negative',
-								'click': ui.createHandlerFn(self, 'autoCapAction', 'stop')
-							}, '停用并停止')
-						]),
-						E('p', { 'class': 'cbi-section-descr' },
-							'开机自动在 pppoe-tr069 上抓 7547/9090 流量，写入 /root/pcaps/acs-auto-*.pcap（重启不丢），用于蹲守 ACS 配置下发。状态每 5 秒自动刷新。'),
-						E('p', {}, [self.autoCapBadge])
+					E('div', { 'class': 'cbi-page-actions' }, [
+						E('button', {
+							'class': 'cbi-button cbi-button-action',
+							'click': ui.createHandlerFn(self, 'captureAction', 'start')
+						}, '开始抓包'),
+						E('button', {
+							'class': 'cbi-button cbi-button-negative',
+							'click': ui.createHandlerFn(self, 'captureAction', 'stop')
+						}, '停止抓包'),
+						E('button', {
+							'class': 'cbi-button',
+							'click': ui.createHandlerFn(self, 'downloadPcap')
+						}, '下载 PCAP')
 					]),
-					E('div', { 'class': 'cbi-section' }, [
-						E('h3', {}, '抓取原始记录'),
-						E('p', { 'class': 'cbi-section-descr' },
-							'tcpdump 实时输出与抓包统计（每 5 秒自动刷新；停止抓包后此处显示包数摘要）。'),
-						self.captureLog
+					E('p', {}, [
+						E('label', { 'style': 'font-weight:normal' }, [
+							self.autoCapChk = E('input', {
+								'type': 'checkbox',
+								'change': ui.createHandlerFn(self, 'toggleAutostart')
+							}),
+							' 开机自启蹲守抓包（重启后自动继续，文件存 /root/pcaps/）'
+						])
 					]),
-					E('div', { 'class': 'cbi-section' }, [
-						E('h3', {}, 'ACS 客户端安装'),
+					E('p', { 'class': 'cbi-section-descr' },
+						'在 pppoe-tr069 上抓取 CWMP 会话报文；运行期间下方实时滚动，停止后显示本次统计。下发配置解析前的原始数据来源；EPON OAM/CTC 通道抓包见「光路诊断」页。'),
+					self.captureLog
+				]),
+				E('div', { 'class': 'cbi-section' }, [
+					E('h3', {}, 'ACS 客户端安装'),,
 						E('div', { 'class': 'cbi-page-actions' }, [
 							E('button', {
 								'class': 'cbi-button cbi-button-action',
@@ -364,7 +355,7 @@ return view.extend({
 		});
 	},
 
-	renderStatus: function(enEnabled, pids, capturing, installed, acsOn, linkSt) {
+	renderStatus: function(enEnabled, pids, capturing, autoEn, installed, acsOn, linkSt) {
 		var rows = [];
 		function row(k, v) {
 			rows.push(E('tr', { 'class': 'tr' }, [
@@ -409,23 +400,22 @@ return view.extend({
 			row('拨号错误', E('span', { 'class': 'label' }, '未知'));
 		}
 
-		row('ACS 客户端启用', acsOn != null
-			? (acsOn
-				? E('span', { 'class': 'label label-success' }, '已启用')
-				: E('span', { 'class': 'label label-warning' }, '已停用'))
-			: E('span', { 'class': 'label' }, '未配置'));
-		row('开机自启', enEnabled
+		row('蹲守抓包自启', autoEn
 			? E('span', { 'class': 'label label-success' }, '已启用')
 			: E('span', { 'class': 'label label-warning' }, '未启用'));
+		if (this.autoCapChk)
+			this.autoCapChk.checked = !!autoEn;
 		row('easycwmp 进程', pids
 			? [E('span', { 'class': 'label label-success' }, '运行中'), ' (pid %s)'.format(pids)]
 			: E('span', { 'class': 'label label-warning' }, '未运行'));
 		row('报文抓取', capturing
 			? E('span', { 'class': 'label label-success' }, '抓取中')
 			: E('span', { 'class': 'label label-warning' }, '未在抓取'));
-		row('ACS 客户端', installed
-			? E('span', { 'class': 'label label-success' }, '已安装')
-			: E('span', { 'class': 'label label-warning' }, '未安装（推荐安装 easycwmp）'));
+		row('ACS 客户端', !installed
+			? E('span', { 'class': 'label label-danger' }, '未安装')
+			: (acsOn
+				? E('span', { 'class': 'label label-success' }, '已启用')
+				: E('span', { 'class': 'label label-info' }, '已安装（未启用）')));
 		if (this.clientBadge) {
 			this.clientBadge.className = installed ? 'label label-success' : 'label label-warning';
 			this.clientBadge.textContent = installed ? '已安装（推荐）' : '未安装（推荐安装）';
@@ -442,35 +432,23 @@ return view.extend({
 		return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c',
 			'/etc/init.d/easycwmpd enabled && echo EN_ENABLED || echo EN_DISABLED; ' +
 			'pidof easycwmpd easycwmp 2>/dev/null | tr "\\n" " "; echo; ' +
-			'/usr/libexec/onu-acscap status 2>/dev/null | grep -q "^RUNNING" && echo RUNNING || echo STOPPED; ' +
+			'[ -f /run/onu-acscap.pid ] && kill -0 "$(cat /run/onu-acscap.pid)" 2>/dev/null && echo RUNNING || echo STOPPED; ' +
+			'/etc/init.d/onu-acscap enabled >/dev/null 2>&1 && echo AUTO_EN || echo AUTO_DIS; ' +
 			'command -v easycwmpd >/dev/null 2>&1 && echo CWMP_INSTALLED || echo CWMP_MISSING; ' +
 			'[ "$(uci -q get easycwmp.@local[0].enable_acs)" = "0" ] && echo ACS_OFF || echo ACS_ON; ' +
 			'echo IFSTATUS_BEGIN; /sbin/ifstatus tr069 2>/dev/null; echo IFSTATUS_END'
 		]), '').then(function(text) {
 			var lines = String(text || '').split('\n');
-			self.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'CWMP_INSTALLED', lines[4] !== 'ACS_OFF', parseIfstatus(text));
+			self.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'AUTO_EN', lines[4] === 'CWMP_INSTALLED', lines[5] !== 'ACS_OFF', parseIfstatus(text));
 		}).then(function() {
 			if (!self.captureLog || !self.captureLog.isConnected)
 				return;
 			return fs.exec_direct('/bin/sh', ['-c',
-				'/usr/libexec/onu-acscap log 2>/dev/null || echo "（抓包助手未部署，请重新刷机或手动安装 luci-app-onu-mgmt）"'
+				'echo "— 实时报文 —"; tail -n 12 ' + CLOG + ' 2>/dev/null; ' +
+				'f=$(ls -t /root/pcaps/acs-*.pcap 2>/dev/null | head -1); ' +
+				'[ -n "$f" ] && echo "— 本次 PCAP：$(wc -c < "$f") 字节 —" || echo "— 尚无 PCAP —"'
 			]).then(function(out) {
 				self.captureLog.textContent = (out || '').trim() || '尚未开始抓包。';
-			});
-		}).then(function() {
-			if (!self.autoCapBadge || !self.autoCapBadge.isConnected)
-				return;
-			return fs.exec_direct('/bin/sh', ['-c',
-				'en=$(/etc/init.d/onu-acscap enabled 2>/dev/null && echo EN || echo DIS); ' +
-				'[ -f /run/onu-acscap.pid ] && kill -0 "$(cat /run/onu-acscap.pid)" 2>/dev/null && st=RUNNING || st=STOPPED; ' +
-				'echo "$en $st"'
-			]).then(function(out) {
-				var p = String(out || '').trim().split(/\s+/);
-				var en = p[0] === 'EN', running = p[1] === 'RUNNING';
-				self.autoCapBadge.className = 'label ' + (running ? 'label-success' : (en ? 'label-warning' : ''));
-				self.autoCapBadge.textContent = running
-					? '蹲守抓包运行中'
-					: (en ? '已启用（当前未运行）' : '未启用');
 			});
 		});
 	},
@@ -522,16 +500,6 @@ return view.extend({
 			});
 	},
 
-	autoCapAction: function(action) {
-		var cmd = action === 'start'
-			? '/etc/init.d/onu-acscap enable && /etc/init.d/onu-acscap start && echo AUTO_STARTED'
-			: '/etc/init.d/onu-acscap stop && /etc/init.d/onu-acscap disable && echo AUTO_STOPPED';
-		return fs.exec_direct('/bin/sh', ['-c', cmd]).then(function(out) {
-			ui.addNotification(null, E('p', {}, (out || '').trim().split('\n').pop() || '执行完成'), 'info');
-			return this.refreshStatus();
-		}.bind(this));
-	},
-
 	refreshLog: function() {
 		return fs.exec_direct('/sbin/logread', ['-e', 'easycwmp']).then(function(out) {
 			var lines = (out || '').trim().split('\n').slice(-40);
@@ -540,27 +508,46 @@ return view.extend({
 	},
 
 	captureAction: function(action) {
-		return fs.exec_direct('/usr/libexec/onu-acscap', [action]).then(function(out) {
-			var last = (out || '').trim().split('\n').pop() || '';
+		return fs.exec_direct('/bin/sh', ['-c', '/etc/init.d/onu-acscap ' + action]).then(function() {
 			ui.addNotification(null, E('p', {},
-				last.indexOf('FAILED') === 0 ? '抓包启动失败：' + last :
-				action === 'start' ? '抓包已启动，状态每 5 秒自动刷新。' : '抓包已停止。'),
-				last.indexOf('FAILED') === 0 ? 'danger' : 'info');
-		});
+				action === 'start' ? '抓包已启动，下方实时滚动。' : '抓包已停止，下方保留本次报文与统计。'), 'info');
+			return this.refreshStatus();
+		}.bind(this));
+	},
+
+	toggleAutostart: function(ev) {
+		var en = ev.target.checked;
+		return fs.exec_direct('/bin/sh', ['-c',
+			en ? '/etc/init.d/onu-acscap enable' : '/etc/init.d/onu-acscap disable'
+		]).then(function() {
+			ui.addNotification(null, E('p', {},
+				en ? '已启用：重启后自动继续抓包。当前会话仍由开始/停止按钮控制。'
+				   : '已停用开机自启，当前抓包不受影响。'), 'info');
+			return this.refreshStatus();
+		}.bind(this));
 	},
 
 	downloadPcap: function() {
-		return L.resolveDefault(fs.read_direct(PCAP, 'blob'), null).then(function(blob) {
-			if (!blob || !blob.size) {
-				ui.addNotification(null, E('p', {}, 'PCAP 文件为空或不存在，请先抓包。'), 'warning');
+		return fs.exec_direct('/bin/sh', ['-c',
+			'ls -t /root/pcaps/acs-*.pcap 2>/dev/null | head -1'
+		]).then(function(out) {
+			var f = String(out || '').trim();
+			if (!f) {
+				ui.addNotification(null, E('p', {}, '尚无 PCAP 文件，请先抓包。'), 'warning');
 				return;
 			}
-			var url = URL.createObjectURL(blob);
-			var a = E('a', { 'href': url, 'download': 'acs-capture.pcap' });
-			document.body.appendChild(a);
-			a.click();
-			a.remove();
-			setTimeout(function() { URL.revokeObjectURL(url); }, 5000);
+			return L.resolveDefault(fs.read_direct(f, 'blob'), null).then(function(blob) {
+				if (!blob || !blob.size) {
+					ui.addNotification(null, E('p', {}, 'PCAP 文件为空，请确认抓包已抓到数据。'), 'warning');
+					return;
+				}
+				var url = URL.createObjectURL(blob);
+				var a = E('a', { 'href': url, 'download': f.split('/').pop() });
+				document.body.appendChild(a);
+				a.click();
+				a.remove();
+				setTimeout(function() { URL.revokeObjectURL(url); }, 5000);
+			});
 		});
 	},
 
