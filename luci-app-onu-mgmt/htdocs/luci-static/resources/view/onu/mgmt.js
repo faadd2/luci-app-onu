@@ -406,7 +406,7 @@ return view.extend({
 			: E('span', { 'class': 'label label-warning' }, '未运行'));
 		row('报文抓取', capturing
 			? E('span', { 'class': 'label label-success' }, '抓取中')
-			: E('span', { 'class': 'label' }, '未启动'));
+			: E('span', { 'class': 'label label-warning' }, '未在抓取'));
 		row('ACS 客户端', installed
 			? E('span', { 'class': 'label label-success' }, '已安装')
 			: E('span', { 'class': 'label label-warning' }, '未安装（推荐安装 easycwmp）'));
