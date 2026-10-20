@@ -64,6 +64,8 @@ config account
 EOF
 
 # 2) 全局配置（feed 包不附带此路径，由本包供货；无 stdio.so）
+# ctrl_tcp 必须绑 LAN 地址（127.0.0.1 会导致软话机页面从浏览器连不上 4444）
+lan_ip=$(uci -q get network.lan.ipaddr || echo 127.0.0.1)
 mkdir -p /etc/baresip
 cat > /etc/baresip/config <<EOF
 module_path		/usr/lib/baresip/modules
@@ -71,7 +73,7 @@ module		account.so
 module		g711.so
 module		menu.so
 module		ctrl_tcp.so
-ctrl_tcp_listen		127.0.0.1:4444
+ctrl_tcp_listen		${lan_ip}:4444
 audio_player		null,null
 audio_source		null,null
 audio_alert		null,null
