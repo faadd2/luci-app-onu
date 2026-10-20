@@ -14,7 +14,7 @@ if (!document.getElementById('onu-shared-css')) {
 	var _onuCss = document.createElement('link');
 	_onuCss.id = 'onu-shared-css';
 	_onuCss.rel = 'stylesheet';
-	_onuCss.href = L.resource('view/onu/onu.css');
+	_onuCss.href = L.resource('view/onu/onu.css') + '?v=3';
 	document.head.appendChild(_onuCss);
 }
 
@@ -27,8 +27,6 @@ if (!document.getElementById('onu-shared-css')) {
  */
 
 var PCAP = '/tmp/acs-capture.pcap';
-var CLOG = '/tmp/acs-capture.log';
-var CPID = '/tmp/acs-capture.pid';
 
 /* 从 load/refresh 的输出里解析 ifstatus <iface> 的 JSON 段（IFSTATUS_BEGIN/END 包裹） */
 function parseIfstatus(text) {
@@ -52,9 +50,11 @@ return view.extend({
 		return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c',
 			'/etc/init.d/easycwmpd enabled && echo EN_ENABLED || echo EN_DISABLED; ' +
 			'pidof easycwmpd easycwmp 2>/dev/null | tr "\\n" " "; echo; ' +
-			'kill -0 "$(cat ' + CPID + ' 2>/dev/null)" 2>/dev/null && echo RUNNING || echo STOPPED; ' +
+			'/usr/libexec/onu-acscap status 2>/dev/null | grep -q "^RUNNING" && echo RUNNING || echo STOPPED; ' +
 			'command -v easycwmpd >/dev/null 2>&1 && echo CWMP_INSTALLED || echo CWMP_MISSING; ' +
 			'[ "$(uci -q get easycwmp.@local[0].enable_acs)" = "0" ] && echo ACS_OFF || echo ACS_ON; ' +
+			'command -v easycwmp >/dev/null 2>&1 && { echo ID_BEGIN; easycwmp inform device_id 2>/dev/null; echo ID_END; }; ' +
+			'grep -q disguise-B /etc/init.d/easycwmpd 2>/dev/null && echo PATCH_ON || echo PATCH_OFF; ' +
 			'echo IFSTATUS_BEGIN; /sbin/ifstatus tr069 2>/dev/null; echo IFSTATUS_END'
 		]), '\n\nSTOPPED\nCWMP_MISSING\nACS_ON');
 	},
@@ -131,6 +131,40 @@ return view.extend({
 		o.placeholder = '3600';
 		o.depends('periodic_enable', '1');
 
+		/* ---- 设备身份（TR-069 上报标识） ---- */
+		var k = new form.Map('easycwmp', '设备身份（TR-069 上报标识）',
+			'Inform 报文向运营商 ACS 声明的设备身份六元组。换机复用场景：保持与在网登记设备一致，可避免网管侧异常标记。' +
+			'各字段必须为单行文本，禁止换行——含换行的非法值会毒化整个 easycwmp 配置的读写。');
+		k.readonly = !L.hasViewPermission();
+		this.mapK = k;
+
+		var ks = k.section(form.TypedSection, 'device', '身份六元组',
+			'OUI 为 6 位十六进制大写（IEEE 分配给厂商）；Serial 为设备标识号；版本号格式随厂商。' +
+			'本固件 init 脚本默认每次启动会用 /etc/device_info 回填覆盖此处——须先打「去回填」补丁（状态见上方横幅），否则修改重启后失效。');
+		ks.anonymous = true;
+		ks.addremove = false;
+
+		o = ks.option(form.Value, 'manufacturer', 'Manufacturer（厂商）');
+		o.rmempty = false;
+
+		o = ks.option(form.Value, 'oui', 'OUI');
+		o.datatype = 'rangelength(6,6)';
+		o.placeholder = 'D0F76E';
+		o.rmempty = false;
+
+		o = ks.option(form.Value, 'product_class', 'ProductClass（型号）');
+		o.rmempty = false;
+
+		o = ks.option(form.Value, 'serial_number', 'SerialNumber（序列号）');
+		o.datatype = 'rangelength(8,64)';
+		o.rmempty = false;
+
+		o = ks.option(form.Value, 'hardware_version', 'HardwareVersion');
+		o.rmempty = false;
+
+		o = ks.option(form.Value, 'software_version', 'SoftwareVersion');
+		o.rmempty = false;
+
 		/* ---- TR-069 拨号链路（network 配置，独立 Map） ---- */
 		var n = new form.Map('network', 'TR-069 拨号链路',
 			'CWMP 管理通道的数据链路：本机向 ACS 周期上报与 ACS 反向连接都经此 PPPoE 链路（北京联通 VLAN 3969，账号 bjcu-hgu@rms）。');
@@ -170,6 +204,22 @@ return view.extend({
 		this.statusBox = E('div', { 'class': 'cbi-section' });
 		this.renderStatus(lines[0] === 'EN_ENABLED', (lines[1] || '').trim(), lines[2] === 'RUNNING', lines[3] === 'CWMP_INSTALLED', lines[4] !== 'ACS_OFF', parseIfstatus(statusText));
 		poll.add(function() { return self.refreshStatus(); }, 5);
+
+		/* ---- 身份页：去回填补丁状态 + 当前上报身份回读 ---- */
+		var idm = String(statusText || '').match(/ID_BEGIN([\s\S]*?)ID_END/);
+		var idReadback = idm ? idm[1].trim() : '（easycwmp 未安装或回读失败）';
+		var patchOn = /(^|\n)PATCH_ON(\n|$)/.test(String(statusText || ''));
+
+		this.identityBanner = E('div', { 'class': 'cbi-section' }, patchOn
+			? E('p', {}, [E('span', { 'class': 'label label-success' }, '去回填补丁已生效'),
+				' uci 为身份唯一事实源，本页保存后重启即持久。'])
+			: E('p', {}, [E('span', { 'class': 'label label-warning' }, '未打去回填补丁'),
+				' /etc/init.d/easycwmpd 每次启动会用 /etc/device_info 回填覆盖本页修改（刷入含补丁的固件后消失）。']));
+
+		this.identityLive = E('pre', {
+			'style': 'max-height: 10em; overflow: auto; margin: 0.5rem 1rem 1rem; padding: 0.5em; ' +
+				'background: rgba(127,127,127,0.08); font-size: 0.8125rem; white-space: pre-wrap;'
+		}, idReadback);
 
 		/* ---- 推荐客户端卡片 ---- */
 		this.clientBadge = E('span', { 'class': 'label' }, '检测中…');
@@ -221,8 +271,28 @@ return view.extend({
 			});
 		});
 
+		var idPane = k.render().then(function(idNode) {
+			return E('div', {}, [
+				self.identityBanner,
+				E('div', { 'class': 'cbi-section' }, [
+					E('h3', {}, '当前上报身份（回读）'),
+					E('p', { 'class': 'cbi-section-descr' },
+						'easycwmp inform device_id 的实时回读，即下一轮 Inform 将携带的身份。保存后自动刷新。'),
+					self.identityLive
+				]),
+				idNode,
+				E('div', { 'class': 'cbi-page-actions' }, [
+					E('button', {
+						'class': 'cbi-button cbi-button-save',
+						'click': ui.createHandlerFn(self, 'saveIdentity')
+					}, '保存身份并重启上报')
+				])
+			]);
+		});
+
 		return tabs.render([
 			{ name: '配置', content: cfgPane },
+			{ name: '身份', content: idPane },
 			{
 				name: '调试', content: E('div', {}, [
 					E('div', { 'class': 'cbi-section' }, [
@@ -356,7 +426,7 @@ return view.extend({
 		return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c',
 			'/etc/init.d/easycwmpd enabled && echo EN_ENABLED || echo EN_DISABLED; ' +
 			'pidof easycwmpd easycwmp 2>/dev/null | tr "\\n" " "; echo; ' +
-			'kill -0 "$(cat ' + CPID + ' 2>/dev/null)" 2>/dev/null && echo RUNNING || echo STOPPED; ' +
+			'/usr/libexec/onu-acscap status 2>/dev/null | grep -q "^RUNNING" && echo RUNNING || echo STOPPED; ' +
 			'command -v easycwmpd >/dev/null 2>&1 && echo CWMP_INSTALLED || echo CWMP_MISSING; ' +
 			'[ "$(uci -q get easycwmp.@local[0].enable_acs)" = "0" ] && echo ACS_OFF || echo ACS_ON; ' +
 			'echo IFSTATUS_BEGIN; /sbin/ifstatus tr069 2>/dev/null; echo IFSTATUS_END'
@@ -367,8 +437,7 @@ return view.extend({
 			if (!self.captureLog || !self.captureLog.isConnected)
 				return;
 			return fs.exec_direct('/bin/sh', ['-c',
-				'echo "— tcpdump 输出 —"; tail -n 8 ' + CLOG + ' 2>/dev/null; ' +
-				'[ -f ' + PCAP + ' ] && echo "— 已抓取 $(wc -c < ' + PCAP + ') 字节（PCAP）—" || echo "— 尚无 PCAP 文件 —"'
+				'/usr/libexec/onu-acscap log 2>/dev/null || echo "（抓包助手未部署，请重新刷机或手动安装 luci-app-onu-mgmt）"'
 			]).then(function(out) {
 				self.captureLog.textContent = (out || '').trim() || '尚未开始抓包。';
 			});
@@ -380,6 +449,25 @@ return view.extend({
 			ui.addNotification(null, E('p', {}, (out || '').trim().split('\n').pop() || '执行完成'), 'info');
 			return this.refreshStatus();
 		}.bind(this));
+	},
+
+	saveIdentity: function() {
+		var self = this;
+		return this.mapK.save()
+			.then(applyUci)
+			.then(function() {
+				return fs.exec_direct('/bin/sh', ['-c',
+					'/etc/init.d/easycwmpd restart; sleep 4; easycwmp inform device_id 2>/dev/null']);
+			})
+			.then(function(out) {
+				self.identityLive.textContent = (out || '').trim() || '（回读失败）';
+				ui.addNotification(null, E('p', {},
+					'身份已保存并重启 easycwmpd，下一轮 Inform（≤300 秒）将携带新身份。'), 'info');
+				return this.refreshStatus();
+			}.bind(this))
+			.catch(function(err) {
+				ui.addNotification(null, E('p', {}, '保存失败：%s'.format(err.message)), 'danger');
+			});
 	},
 
 	saveAndRestart: function() {
@@ -395,7 +483,7 @@ return view.extend({
 			})
 			.then(function(out) {
 				ui.addNotification(null, E('p', {},
-					/RESULT_ENABLED/.test(out || '') ? '已保存并重启 easycwmpd。' : '已保存，ACS 客户端已停用并取消自启。'), 'info');
+					/RESULT_ENABLED/.test(out || '') ? '已保存并重启 easycwmpd，配置生效需数秒。' : '已保存，ACS 客户端已停用并取消自启。'), 'info');
 				return this.refreshStatus();
 			}.bind(this))
 			.catch(function(err) {
@@ -411,16 +499,12 @@ return view.extend({
 	},
 
 	captureAction: function(action) {
-		var cmd;
-		if (action === 'start')
-			cmd = 'rm -f ' + PCAP + ' ' + CLOG + '; /usr/bin/tcpdump -i pon0 -s 0 -nn -w ' + PCAP +
-				' "port 7547 or port 9090" > ' + CLOG + ' 2>&1 & echo $! > ' + CPID;
-		else
-			cmd = 'kill "$(cat ' + CPID + ' 2>/dev/null)" 2>/dev/null; rm -f ' + CPID;
-
-		return fs.exec_direct('/bin/sh', ['-c', cmd]).then(function() {
+		return fs.exec_direct('/usr/libexec/onu-acscap', [action]).then(function(out) {
+			var last = (out || '').trim().split('\n').pop() || '';
 			ui.addNotification(null, E('p', {},
-				action === 'start' ? '抓包已启动，状态每 5 秒自动刷新。' : '抓包已停止。'), 'info');
+				last.indexOf('FAILED') === 0 ? '抓包启动失败：' + last :
+				action === 'start' ? '抓包已启动，状态每 5 秒自动刷新。' : '抓包已停止。'),
+				last.indexOf('FAILED') === 0 ? 'danger' : 'info');
 		});
 	},
 
