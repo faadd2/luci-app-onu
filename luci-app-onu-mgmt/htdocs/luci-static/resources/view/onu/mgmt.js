@@ -245,6 +245,8 @@ return view.extend({
 				'background: rgba(127,127,127,0.08); font-size: 0.8125rem; white-space: pre-wrap;'
 		}, '尚未开始抓包。');
 
+		this.autoCapBadge = E('span', { 'class': 'label' }, '载入中…');
+
 		var cfgPane = m.render().then(function(mapNode) {
 			/* 总开关折叠：enable_acs 在 local 段，acs 段的选项 depends 无法跨段引用，手动隐藏 */
 			var enInput = mapNode.querySelector('[data-field$=".enable_acs"] input[type="checkbox"]');
@@ -312,7 +314,21 @@ return view.extend({
 							}, '下载 PCAP')
 						]),
 						E('p', { 'class': 'cbi-section-descr' },
-							'在 PON 口抓取 CWMP 会话报文。下发配置解析前的原始数据来源；EPON OAM/CTC 通道抓包见「光路诊断」页。')
+							'在 PON 口抓取 CWMP 会话报文。下发配置解析前的原始数据来源；EPON OAM/CTC 通道抓包见「光路诊断」页。'),
+						E('h3', {}, '开机自启蹲守抓包'),
+						E('div', { 'class': 'cbi-page-actions' }, [
+							E('button', {
+								'class': 'cbi-button cbi-button-action',
+								'click': ui.createHandlerFn(self, 'autoCapAction', 'start')
+							}, '启用并立即开始'),
+							E('button', {
+								'class': 'cbi-button cbi-button-negative',
+								'click': ui.createHandlerFn(self, 'autoCapAction', 'stop')
+							}, '停用并停止')
+						]),
+						E('p', { 'class': 'cbi-section-descr' },
+							'开机自动在 pppoe-tr069 上抓 7547/9090 流量，写入 /root/pcaps/acs-auto-*.pcap（重启不丢），用于蹲守 ACS 配置下发。状态每 5 秒自动刷新。'),
+						E('p', {}, [self.autoCapBadge])
 					]),
 					E('div', { 'class': 'cbi-section' }, [
 						E('h3', {}, '抓取原始记录'),
@@ -441,6 +457,21 @@ return view.extend({
 			]).then(function(out) {
 				self.captureLog.textContent = (out || '').trim() || '尚未开始抓包。';
 			});
+		}).then(function() {
+			if (!self.autoCapBadge || !self.autoCapBadge.isConnected)
+				return;
+			return fs.exec_direct('/bin/sh', ['-c',
+				'en=$(/etc/init.d/onu-acscap enabled 2>/dev/null && echo EN || echo DIS); ' +
+				'[ -f /run/onu-acscap.pid ] && kill -0 "$(cat /run/onu-acscap.pid)" 2>/dev/null && st=RUNNING || st=STOPPED; ' +
+				'echo "$en $st"'
+			]).then(function(out) {
+				var p = String(out || '').trim().split(/\s+/);
+				var en = p[0] === 'EN', running = p[1] === 'RUNNING';
+				self.autoCapBadge.className = 'label ' + (running ? 'label-success' : (en ? 'label-warning' : ''));
+				self.autoCapBadge.textContent = running
+					? '蹲守抓包运行中'
+					: (en ? '已启用（当前未运行）' : '未启用');
+			});
 		});
 	},
 
@@ -489,6 +520,16 @@ return view.extend({
 			.catch(function(err) {
 				ui.addNotification(null, E('p', {}, '操作失败：%s'.format(err.message)), 'danger');
 			});
+	},
+
+	autoCapAction: function(action) {
+		var cmd = action === 'start'
+			? '/etc/init.d/onu-acscap enable && /etc/init.d/onu-acscap start && echo AUTO_STARTED'
+			: '/etc/init.d/onu-acscap stop && /etc/init.d/onu-acscap disable && echo AUTO_STOPPED';
+		return fs.exec_direct('/bin/sh', ['-c', cmd]).then(function(out) {
+			ui.addNotification(null, E('p', {}, (out || '').trim().split('\n').pop() || '执行完成'), 'info');
+			return this.refreshStatus();
+		}.bind(this));
 	},
 
 	refreshLog: function() {

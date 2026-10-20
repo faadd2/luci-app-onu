@@ -1,0 +1,29 @@
+#!/bin/sh /etc/rc.common
+# onu-acscap — ACS (TR-069) 蹲守抓包开机自启
+# 启用后开机自动抓 pppoe-tr069 上 7547/9090 流量，写入 /root/pcaps/（重启不丢），
+# 用于蹲守运营商 ACS 配置下发。页面：oun > ACS 管理 > 调试 > 开机自启蹲守抓包。
+START=98
+STOP=10
+
+PIDFILE=/run/onu-acscap.pid
+IFACE=pppoe-tr069
+FILTER="port 7547 or port 9090"
+
+start() {
+    mkdir -p /root/pcaps
+    # 已在跑则跳过（幂等）
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        return 0
+    fi
+    local f="/root/pcaps/acs-auto-$(date +%Y%m%d_%H%M%S).pcap"
+    setsid /usr/bin/tcpdump -i "$IFACE" -s 0 -nn -w "$f" "$FILTER" \
+        >/dev/null 2>&1 </dev/null &
+    echo $! > "$PIDFILE"
+}
+
+stop() {
+    if [ -f "$PIDFILE" ]; then
+        kill "$(cat "$PIDFILE")" 2>/dev/null
+        rm -f "$PIDFILE"
+    fi
+}
