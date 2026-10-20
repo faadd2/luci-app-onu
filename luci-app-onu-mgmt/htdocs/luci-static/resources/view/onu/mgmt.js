@@ -273,26 +273,28 @@ return view.extend({
 			});
 		});
 
+		var idPane = k.render().then(function(idNode) {
+			return E('div', {}, [
+				self.identityBanner,
+				E('div', { 'class': 'cbi-section' }, [
+					E('h3', {}, '当前上报身份（回读）'),
+					E('p', { 'class': 'cbi-section-descr' },
+						'easycwmp inform device_id 的实时回读，即下一轮 Inform 将携带的身份。保存后自动刷新。'),
+					self.identityLive
+				]),
+				idNode,
+				E('div', { 'class': 'cbi-page-actions' }, [
+					E('button', {
+						'class': 'cbi-button cbi-button-save',
+						'click': ui.createHandlerFn(self, 'saveIdentity')
+					}, '保存身份并重启上报')
+				])
+			]);
+		});
+
 		return tabs.render([
 			{ name: '配置', content: cfgPane },
-			{
-				name: '身份', content: E('div', {}, [
-					this.identityBanner,
-					E('div', { 'class': 'cbi-section' }, [
-						E('h3', {}, '当前上报身份（回读）'),
-						E('p', { 'class': 'cbi-section-descr' },
-							'easycwmp inform device_id 的实时回读，即下一轮 Inform 将携带的身份。保存后自动刷新。'),
-						this.identityLive
-					]),
-					k.render(),
-					E('div', { 'class': 'cbi-page-actions' }, [
-						E('button', {
-							'class': 'cbi-button cbi-button-save',
-							'click': ui.createHandlerFn(self, 'saveIdentity')
-						}, '保存身份并重启上报')
-					])
-				])
-			},
+			{ name: '身份', content: idPane },
 			{
 				name: '调试', content: E('div', {}, [
 					E('div', { 'class': 'cbi-section' }, [
