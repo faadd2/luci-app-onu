@@ -23,8 +23,9 @@ start() {
         >/dev/null 2>&1 </dev/null &
     echo $! > "$PIDFILE"
     rm -f "$CLOG"
+    # 显示探针 stderr 并入 CLOG：停止时 tcpdump 输出包数统计摘要
     setsid /usr/bin/tcpdump -i "$IFACE" -s 0 -nn -l "$FILTER" \
-        > "$CLOG" 2>/dev/null </dev/null &
+        > "$CLOG" 2>&1 </dev/null &
     echo $! > "$DPIDFILE"
 }
 

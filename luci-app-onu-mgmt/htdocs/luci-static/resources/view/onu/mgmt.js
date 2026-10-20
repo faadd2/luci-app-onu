@@ -324,11 +324,16 @@ return view.extend({
 						])
 					]),
 					E('p', { 'class': 'cbi-section-descr' },
-						'在 pppoe-tr069 上抓取 CWMP 会话报文；运行期间下方实时滚动，停止后显示本次统计。下发配置解析前的原始数据来源；EPON OAM/CTC 通道抓包见「光路诊断」页。'),
+						'在 pppoe-tr069 上抓取 CWMP 会话报文；运行期间下方「抓取原始记录」实时滚动。下发配置解析前的原始数据来源；EPON OAM/CTC 通道抓包见「光路诊断」页。')
+				]),
+				E('div', { 'class': 'cbi-section' }, [
+					E('h3', {}, '抓取原始记录'),
+					E('p', { 'class': 'cbi-section-descr' },
+						'报文实时滚动与抓包统计（每 5 秒自动刷新；停止抓包后显示 tcpdump 统计摘要）。'),
 					self.captureLog
 				]),
 				E('div', { 'class': 'cbi-section' }, [
-					E('h3', {}, 'ACS 客户端安装'),,
+					E('h3', {}, 'ACS 客户端安装'),
 						E('div', { 'class': 'cbi-page-actions' }, [
 							E('button', {
 								'class': 'cbi-button cbi-button-action',
