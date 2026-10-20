@@ -1,8 +1,11 @@
 #!/bin/sh
 # onu-voice-phone — baresip ctrl_tcp 桥（LuCI 软话机页后端）
 # 用法: onu-voice-phone status|dial <号码>|answer|hangup|hangupall
-# 协议: 127.0.0.1:4444 换行分隔 JSON（baresip mod-ctrl_tcp）
+# 协议: baresip mod-ctrl_tcp netstring JSON；监听地址 = baresip 配置的 sip_listen 同款 LAN IP
+# （ctrl_tcp 绑定 LAN IP 后 127.0.0.1 不再可达，必须按 uci 动态解析，勿写死）
 CTRL_PORT=4444
+CTRL_HOST=$(uci -q get network.lan.ipaddr 2>/dev/null | cut -d/ -f1)
+[ -z "$CTRL_HOST" ] && CTRL_HOST=127.0.0.1
 
 ctrl_cmd() {
 	# $1 = JSON 请求行；baresip ctrl_tcp 使用 netstring 成帧（<len>:<json>,）
@@ -11,7 +14,7 @@ ctrl_cmd() {
 	len=$(printf '%s' "$payload" | wc -c)
 	printf '%s:%s,' "$len" "$payload" \
 		| { cat; sleep 1; } \
-		| timeout 3 nc 127.0.0.1 $CTRL_PORT 2>/dev/null \
+		| timeout 3 nc "$CTRL_HOST" $CTRL_PORT 2>/dev/null \
 		| tr -d '\000' \
 		| awk '
 			{ buf = buf $0 }
