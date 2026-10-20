@@ -66,6 +66,7 @@ EOF
 # 2) 全局配置（feed 包不附带此路径，由本包供货；无 stdio.so）
 # ctrl_tcp 必须绑 LAN 地址（127.0.0.1 会导致软话机页面从浏览器连不上 4444）
 lan_ip=$(uci -q get network.lan.ipaddr || echo 127.0.0.1)
+lan_ip=${lan_ip%%/*}
 mkdir -p /etc/baresip
 cat > /etc/baresip/config <<EOF
 module_path		/usr/lib/baresip/modules
