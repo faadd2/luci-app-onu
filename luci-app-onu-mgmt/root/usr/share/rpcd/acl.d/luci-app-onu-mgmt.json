@@ -8,10 +8,11 @@
 			},
 			"file": {
 				"/etc/init.d/easycwmpd enabled": [ "exec" ],
+				"/etc/init.d/onu-acscap enabled": [ "exec" ],
 				"/sbin/logread -e *": [ "exec" ],
 				"/tmp/acs-capture.log": [ "read" ],
-				"/tmp/acs-capture.pid": [ "read" ],
-				"/tmp/acs-capture.pcap": [ "read" ]
+				"/run/onu-acscap.pid": [ "read" ],
+				"/root/pcaps/acs-*": [ "read" ]
 			}
 		},
 		"write": {
@@ -22,8 +23,7 @@
 			"file": {
 				"/etc/init.d/easycwmpd restart": [ "exec" ],
 				"/usr/libexec/onu-acs-install": [ "exec" ],
-				"/bin/sh -c *": [ "exec" ],
-				"/tmp/acs-capture.pid": [ "write" ]
+				"/bin/sh -c *": [ "exec" ]
 			}
 		}
 	}

@@ -540,7 +540,7 @@ return view.extend({
 						'OUTGOING': ['呼出', 'label label-info'],
 						'RINGING': ['振铃', 'label label-info'],
 						'ESTABLISHED': ['通话中', 'label label-success'],
-						'UNKNOWN': ['进行中', 'label']
+						'UNKNOWN': ['进行中', 'label label-info']
 					};
 					var st = stMap[c.state] || stMap.UNKNOWN;
 					var who = c.name ?
