@@ -1,5 +1,5 @@
 #!/bin/sh
-# onu-voice-apply — 从 UCI onu.ims 生成 baresip 配置并重启服务（支持直通/网关两种模式）
+# onu-voice-apply — 从 UCI onu.ims 生成 baresip/asterisk 配置并重启服务（支持直通/网关两种模式）
 # 思路2（10-19 实机验证通过）：不再自带 init.d/baresip（与 feed 包同路径冲突），
 # 改为生成官方 init 消费的 UCI（/etc/config/baresip）+ 全局配置（/etc/baresip/config），
 # 由 feed 官方 init.d/baresip 承载服务（procd、respawn、user baresip）。
@@ -7,8 +7,11 @@
 # 工作模式（UCI onu.ims.gw_mode，缺省 direct）：
 #   direct（直通）：baresip 直注 IMS。必要参数：完整 SIP ID 作 auth_user（裸号码 403）；
 #                 sip_listen 绑 voip 口 IP:5060（SBC 对随机源端口完全沉默）。
-#   gateway（网关）：Asterisk 注册 IMS 并作为 SIP 服务器；baresip 注册为分机 1002，
+#   gateway（网关）：Asterisk 注册 IMS 并作为 SIP 服务器；baresip 注册为网页分机，
 #                 Asterisk 不校验源端口，baresip 不绑 sip_listen（5060 归 Asterisk）。
+#                 分机身份 = UCI onu.ims.ext_pc/ext_pc_pass（PC 客户端）与
+#                 ext_web/ext_web_pass（网页软话机），缺省 1001/sw1001、1002/sw1002；
+#                 pjsip.conf 与 extensions.conf 每次应用时由本脚本重生成。
 # 注意：配置不加载 stdio.so——实机验证它与 procd /dev/null 标准输入组合会致
 # baresip 每 ~50s 静默退出（epoll fd0 EPERM）。
 set -e
@@ -24,17 +27,202 @@ mkdir -p /etc/baresip
 if [ "$gw_mode" = "gateway" ]; then
 	# ---- 网关模式 ----
 	[ -x /etc/init.d/asterisk ] || { echo '{"ok":false,"msg":"未安装 Asterisk（gateway 模式依赖 apk asterisk）"}'; exit 1; }
-	[ -f /etc/asterisk/pjsip.conf ] || { echo '{"ok":false,"msg":"缺少 /etc/asterisk/pjsip.conf"}'; exit 1; }
 
-	# baresip → Asterisk 分机 1002（密码与 devices/ZN504XG-D/asterisk/pjsip.conf 一致）
+	# 分机身份（缺省 1001/sw1001、1002/sw1002）
+	ext_pc=$(uci -q get onu.ims.ext_pc);      ext_pc=${ext_pc:-1001}
+	ext_pc_pass=$(uci -q get onu.ims.ext_pc_pass); ext_pc_pass=${ext_pc_pass:-sw1001}
+	ext_web=$(uci -q get onu.ims.ext_web);     ext_web=${ext_web:-1002}
+	ext_web_pass=$(uci -q get onu.ims.ext_web_pass); ext_web_pass=${ext_web_pass:-sw1002}
+
+	# IMS 账号参数（与直通模式同源，pjsip.conf 由这里生成）
+	sip_account=$(uci -q get onu.ims.sip_account)
+	sip_password=$(uci -q get onu.ims.sip_password)
+	proxy=$(uci -q get onu.ims.proxy | awk '{print $1}')
+	[ -z "$sip_account" ] && { echo '{"ok":false,"msg":"未配置 SIP 账号"}'; exit 1; }
+	[ -z "$sip_password" ] && { echo '{"ok":false,"msg":"未配置 SIP 密码"}'; exit 1; }
+	[ -z "$proxy" ] && proxy="10.203.255.17"
+	user_part=${sip_account%@*}
+	ims_dom=${sip_account#*@}
+	[ "$ims_dom" = "$sip_account" ] && ims_dom="bj.ims.chinaunicom.cn"
+
+	# voip 口 IP（asterisk transport 绑定用；AOR host 必须是域名形式，见 pjsip 注释）
+	voip_dev=$(uci -q get network.voip.device)
+	voip_dev=${voip_dev:-pon0.3010}
+	voip_ip=$(ip -4 addr show dev "$voip_dev" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
+	if [ -z "$voip_ip" ]; then
+		ifup voip 2>/dev/null || true
+		sleep 3
+		voip_ip=$(ip -4 addr show dev "$voip_dev" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
+	fi
+	[ -z "$voip_ip" ] && { echo '{"ok":false,"msg":"voip 接口无 IP，无法绑定 Asterisk transport"}'; exit 1; }
+
+	# ---- 生成 /etc/asterisk/pjsip.conf（无 ${} 内容，可直接变量展开）----
+	[ -f /etc/asterisk/pjsip.conf ] && [ ! -f /root/pjsip.conf.bak ] && cp -a /etc/asterisk/pjsip.conf /root/pjsip.conf.bak
+	match_lines=""
+	for pip in $(uci -q get onu.ims.proxy); do
+		match_lines="${match_lines}match=${pip}
+"
+	done
+	[ -z "$match_lines" ] && match_lines="match=${proxy}
+"
+	cat > /etc/asterisk/pjsip.conf <<EOF
+; pjsip.conf — 由 onu-voice-apply 生成（勿手改；UIM 语音>调试页管理分机身份）
+; 实证约束（build-8/15）：SBC 要求源地址绑 voip 口、源端口固定 5060；
+; R-URI 必须域名形式 sip:${ims_dom}（IP 形式 403、域名+端口 480）；
+; UA 伪装 PT1570 原厂默认（SBC 实测无 UA 校验，防御性保留）。
+[global]
+type=global
+user_agent=sip phone
+
+[transport-udp-voip]
+type=transport
+protocol=udp
+bind=${voip_ip}:5060
+
+[transport-udp-lan]
+type=transport
+protocol=udp
+bind=${lan_ip}:5060
+
+[auth-ims]
+type=auth
+auth_type=userpass
+username=${sip_account}
+password=${sip_password}
+
+[reg-ims]
+type=registration
+transport=transport-udp-voip
+outbound_auth=auth-ims
+server_uri=sip:${ims_dom};transport=udp
+client_uri=sip:${user_part}@${ims_dom}
+contact_user=${user_part}-ast1
+expiration=1800
+retry_interval=60
+forbidden_retry_interval=300
+
+[ims-aor]
+type=aor
+max_contacts=1
+contact=sip:${ims_dom}
+
+[ims-endpoint]
+type=endpoint
+context=from-trunk
+transport=transport-udp-voip
+outbound_auth=auth-ims
+aors=ims-aor
+from_user=${user_part}
+from_domain=${ims_dom}
+allow=!all,alaw,ulaw
+
+[ims-identify]
+type=identify
+endpoint=ims-endpoint
+${match_lines}
+[${ext_pc}]
+type=aor
+max_contacts=1
+remove_existing=yes
+
+[${ext_pc}]
+type=auth
+auth_type=userpass
+username=${ext_pc}
+password=${ext_pc_pass}
+
+[${ext_pc}]
+type=endpoint
+context=from-internal
+aors=${ext_pc}
+auth=${ext_pc}
+transport=transport-udp-lan
+allow=!all,alaw,ulaw
+rtp_symmetric=yes
+force_rport=yes
+rewrite_contact=yes
+
+[${ext_web}]
+type=aor
+max_contacts=1
+remove_existing=yes
+
+[${ext_web}]
+type=auth
+auth_type=userpass
+username=${ext_web}
+password=${ext_web_pass}
+
+[${ext_web}]
+type=endpoint
+context=from-internal
+aors=${ext_web}
+auth=${ext_web}
+transport=transport-udp-lan
+allow=!all,alaw,ulaw
+rtp_symmetric=yes
+force_rport=yes
+rewrite_contact=yes
+EOF
+
+	# ---- 生成 /etc/asterisk/extensions.conf（含 \${} 拨号变量，引号 heredoc + sed 占位）----
+	[ -f /etc/asterisk/extensions.conf ] && [ ! -f /root/extensions.conf.bak ] && cp -a /etc/asterisk/extensions.conf /root/extensions.conf.bak
+	cat > /etc/asterisk/extensions.conf <<'EOF'
+; extensions.conf — 由 onu-voice-apply 生成（勿手改）
+; from-internal：LAN 客户端（分机 __EXT_PC__/__EXT_WEB__，10XX 内部分机互拨）
+; from-trunk：IMS 入局（含传真检测）；fax-out：.call 文件触发的发传真
+
+[from-internal]
+exten => _10XX,1,Dial(PJSIP/${EXTEN},30)
+exten => _10XX,n,Hangup()
+
+exten => _X.,1,Set(CALLERID(name)=__CID_USER__)
+exten => _X.,2,Dial(PJSIP/ims-endpoint/sip:${EXTEN}@__IMS_DOM__,60)
+exten => _X.,3,Hangup()
+
+[from-trunk]
+exten => _[+0-9*#].,1,Progress()
+exten => _[+0-9*#].,n,Set(FAXOPT(faxdetect)=yes)
+exten => _[+0-9*#].,n,Dial(PJSIP/__EXT_PC__&PJSIP/__EXT_WEB__,30)
+exten => _[+0-9*#].,n,Hangup()
+
+exten => i,1,Hangup()
+exten => t,1,Hangup()
+
+exten => fax,1,NoOp(Fax receive from ${CALLERID(num)})
+exten => fax,n,Set(FAXFILE=/overlay/fax/inbox/${STRFTIME(${EPOCH},,%Y%m%d-%H%M%S)}_${CALLERID(num):0,20}.tif)
+exten => fax,n,Set(FAXOPT(ecm)=yes)
+exten => fax,n,ReceiveFAX(${FAXFILE})
+exten => fax,n,Hangup()
+
+exten => h,1,ExecIf($["${FAXSTATUS}"="SUCCESS"]?System(chmod 644 "${FAXFILE}"))
+exten => h,n,ExecIf($["${FAXSTATUS}"!="SUCCESS"]?System(rm -f "${FAXFILE}"))
+exten => h,n,ExecIf($["${FAXSTATUS}"!=""]?System(echo "IN ${STRFTIME(${EPOCH},,%Y-%m-%d %H:%M:%S)} caller=${CALLERID(num)} status=${FAXSTATUS} pages=${FAXPAGES:-0} file=${FAXFILE}" >> /overlay/fax/inbox/inbox.log))
+
+[fax-out]
+exten => s,1,Set(CALLERID(num)=__CID_USER__)
+exten => s,n,Set(CALLERID(name)=__CID_USER__)
+exten => s,n,Set(FAXOPT(ecm)=yes)
+exten => s,n,SendFAX(${FAXFILE},d)
+exten => s,n,Hangup()
+
+exten => h,1,System(echo "OUT ${STRFTIME(${EPOCH},,%Y-%m-%d %H:%M:%S)} status=${FAXSTATUS} pages=${FAXPAGES:-0} file=${FAXFILE}" >> /overlay/fax/sent/sent.log)
+exten => h,n,ExecIf($["${FAXFILE}"!=""]?System(mv "${FAXFILE}" /overlay/fax/sent/ 2>/dev/null))
+EOF
+	# 占位符替换（值仅含数字与 +*#，sed 安全）
+	sed -i -e "s/__EXT_PC__/${ext_pc}/g" -e "s/__EXT_WEB__/${ext_web}/g" \
+	       -e "s/__CID_USER__/${user_part}/g" -e "s/__IMS_DOM__/${ims_dom}/g" \
+	       /etc/asterisk/extensions.conf
+
+	# baresip → Asterisk 网页分机（密码与 pjsip.conf 一致）
 	cat > /etc/config/baresip <<EOF
 config baresip 'main'
 	option enable '1'
 	option options '-s'
 
 config account
-	option user '1002'
-	option password 'sw1002'
+	option user '${ext_web}'
+	option password '${ext_web_pass}'
 	option server '${lan_ip}'
 	option transport 'udp'
 	option append 'regint=300;registrar=sip:${lan_ip}:5060;ptime=20'
@@ -59,14 +247,13 @@ EOF
 	uci -q commit asterisk
 	# 顺序约束（H-18 竞态修复）：直通模式 baresip 占用 voip_ip:5060，必须先停 baresip
 	# 释放端口，再启 Asterisk（其 transport-udp-voip 绑定同地址:5060，先占先得、失败不重试），
-	# 最后起 baresip（新配置无 sip_listen，用随机源端口注册分机 1002）。反向（网关→直通）
-	# 原脚本已是先停 Asterisk 后启 baresip，故无竞态。
+	# 最后起 baresip（新配置无 sip_listen，用随机源端口注册网页分机）。
 	/etc/init.d/baresip stop >/dev/null 2>&1 || true
 	sleep 1
 	/etc/init.d/asterisk enable >/dev/null 2>&1 || true
 	/etc/init.d/asterisk restart >/dev/null 2>&1 || /etc/init.d/asterisk start >/dev/null 2>&1 || true
 	/etc/init.d/baresip start >/dev/null 2>&1 || true
-	echo "{\"ok\":true,\"msg\":\"网关模式：Asterisk 注册 IMS，baresip 注册分机 1002@${lan_ip}\"}"
+	echo "{\"ok\":true,\"msg\":\"网关模式：Asterisk 注册 IMS，网页软话机注册分机 ${ext_web}@${lan_ip}，PC 客户端注册 ${ext_pc}\"}"
 	exit 0
 fi
 

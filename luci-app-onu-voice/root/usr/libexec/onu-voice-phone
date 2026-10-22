@@ -51,9 +51,17 @@ case "$1" in
 					uri="sip:${uri}@${lan_ip}"
 				else
 					# 直通模式：bare 号码拼到 IMS 代理（历史行为）
-					proxy=$(uci -q get onu.ims.proxy | awk '{print $1}')
-					[ -z "$proxy" ] && proxy="10.203.255.17"
-					uri="sip:${uri}@${proxy}"
+					# zhiztong mode: bare number dialed against SIP account domain
+					# (baresip uag_find_requri_pl matches UA by AOR host only;
+					# proxy IP as host fails first dial with
+					# "could not find UA for sip:num@proxy" after uadel removed
+					# b2bua and menu current UA is NULL)
+					acc=$(uci -q get onu.ims.sip_account)
+					dom=${acc#*@}
+					[ "$dom" = "$acc" ] && dom=""
+					[ -z "$dom" ] && dom=$(uci -q get onu.ims.proxy | awk '{print $1}')
+					[ -z "$dom" ] && dom="10.203.255.17"
+					uri="sip:${uri}@${dom}"
 				fi
 				;;
 		esac
