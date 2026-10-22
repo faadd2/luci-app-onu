@@ -1,8 +1,9 @@
 #!/bin/sh
 # onu-voice-status — 语音链路状态采集（LuCI file exec 调用，输出 JSON）
+# 直通模式：baresip 注册 IMS（reg_ok 由 logread/推断得出）。
+# 网关模式：Asterisk 注册 IMS（gw_reg_ok 由 'pjsip show registrations' 得出），
+#           baresip 注册本机 Asterisk 分机 1002。
 . /lib/functions.sh
-
-json_add_str() { printf '"%s":"%s",' "$1" "$2"; }
 
 # 1) SLIC/驱动状态
 slic_bound=0
@@ -12,13 +13,28 @@ mods=$(lsmod | grep -cE "en75xx_(lec|pcm|zsi|slic|voice)")
 pcm_irq=$(grep -c "1fbd0000.pcm" /proc/interrupts)
 voice_dev=$(ls /dev/ | grep -ci voice)
 
-# 3) 注册状态：无 syslog 模块（模块目录无 syslog.so），logread 无 baresip 记录。
-#    采用推断法：baresip 存活 + voip 接口有地址 = 注册保持（baresip 启动即注册并按 regint 刷新；
-#    北京联通 SBC 对失败注册会 403，进程能稳定存活且接口在线即视为已注册）。
+# 2) baresip 进程与其注册目标（/etc/config/baresip account 段 server 值）
 bpid=$(pidof baresip 2>/dev/null)
 baresip_running=0
 [ -n "$bpid" ] && baresip_running=1
+bare_server=$(awk '/^[[:space:]]*option server/{print $3; exit}' /etc/config/baresip 2>/dev/null)
+bare_server=${bare_server//\'/}
 
+# 3) 工作模式与 Asterisk 状态
+gw_mode=$(uci -q get onu.ims.gw_mode)
+[ -z "$gw_mode" ] && gw_mode="direct"
+asterisk_running=0
+[ -n "$(pidof asterisk 2>/dev/null)" ] && asterisk_running=1
+gw_reg_ok=0
+gw_detail=""
+if [ "$gw_mode" = "gateway" ] && [ "$asterisk_running" = "1" ]; then
+	gw_detail=$(asterisk -rx 'pjsip show registrations' 2>/dev/null | grep 'reg-ims' | tr -d '\r' | sed 's/  */ /g')
+	echo "$gw_detail" | grep -q 'Registered' && gw_reg_ok=1
+fi
+
+# 4) 注册状态：无 syslog 模块（模块目录无 syslog.so），logread 无 baresip 记录。
+#    采用推断法：baresip 存活 + voip 接口有地址 = 注册保持（baresip 启动即注册并按 regint 刷新；
+#    北京联通 SBC 对失败注册会 403，进程能稳定存活且接口在线即视为已注册）。
 voip_up=$(ifstatus voip 2>/dev/null | grep -c '"up": true')
 reg_lines=$(logread 2>/dev/null | grep -iE "baresip.*(regist|200 OK|expiry)" | tail -3 | tr '"' "'" | tr '\n' '|')
 reg_ok=0
@@ -41,6 +57,11 @@ printf '"voice_mods":"%s",' "$mods"
 printf '"pcm_irq":"%s",' "$pcm_irq"
 printf '"voice_dev":"%s",' "$voice_dev"
 printf '"baresip_running":"%s",' "$baresip_running"
+printf '"bare_server":"%s",' "$bare_server"
+printf '"gw_mode":"%s",' "$gw_mode"
+printf '"asterisk_running":"%s",' "$asterisk_running"
+printf '"gw_reg_ok":"%s",' "$gw_reg_ok"
+printf '"gw_detail":"%s",' "$gw_detail"
 printf '"reg_ok":"%s",' "$reg_ok"
 printf '"reg_phone":"%s",' "$reg_phone"
 printf '"reg_lines":"%s",' "$reg_lines"

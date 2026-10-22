@@ -1,15 +1,70 @@
 #!/bin/sh
-# onu-voice-apply — 从 UCI onu.ims 生成官方 baresip 配置并重启服务
+# onu-voice-apply — 从 UCI onu.ims 生成 baresip 配置并重启服务（支持直通/网关两种模式）
 # 思路2（10-19 实机验证通过）：不再自带 init.d/baresip（与 feed 包同路径冲突），
 # 改为生成官方 init 消费的 UCI（/etc/config/baresip）+ 全局配置（/etc/baresip/config），
 # 由 feed 官方 init.d/baresip 承载服务（procd、respawn、user baresip）。
-# 北京联通 IMS 实测必要参数：
-#   - 完整 SIP ID 作 auth_user（裸号码 403）
-#   - sip_listen 绑 voip 口 IP:5060（SBC 对随机源端口完全沉默）
+#
+# 工作模式（UCI onu.ims.gw_mode，缺省 direct）：
+#   direct（直通）：baresip 直注 IMS。必要参数：完整 SIP ID 作 auth_user（裸号码 403）；
+#                 sip_listen 绑 voip 口 IP:5060（SBC 对随机源端口完全沉默）。
+#   gateway（网关）：Asterisk 注册 IMS 并作为 SIP 服务器；baresip 注册为分机 1002，
+#                 Asterisk 不校验源端口，baresip 不绑 sip_listen（5060 归 Asterisk）。
 # 注意：配置不加载 stdio.so——实机验证它与 procd /dev/null 标准输入组合会致
 # baresip 每 ~50s 静默退出（epoll fd0 EPERM）。
 set -e
 
+gw_mode=$(uci -q get onu.ims.gw_mode)
+[ -z "$gw_mode" ] && gw_mode="direct"
+
+# ctrl_tcp 必须绑 LAN 地址（127.0.0.1 会导致软话机页面从浏览器连不上 4444）
+lan_ip=$(uci -q get network.lan.ipaddr || echo 127.0.0.1)
+lan_ip=${lan_ip%%/*}
+mkdir -p /etc/baresip
+
+if [ "$gw_mode" = "gateway" ]; then
+	# ---- 网关模式 ----
+	[ -x /etc/init.d/asterisk ] || { echo '{"ok":false,"msg":"未安装 Asterisk（gateway 模式依赖 apk asterisk）"}'; exit 1; }
+	[ -f /etc/asterisk/pjsip.conf ] || { echo '{"ok":false,"msg":"缺少 /etc/asterisk/pjsip.conf"}'; exit 1; }
+
+	# baresip → Asterisk 分机 1002（密码与 devices/ZN504XG-D/asterisk/pjsip.conf 一致）
+	cat > /etc/config/baresip <<EOF
+config baresip 'main'
+	option enable '1'
+	option options '-s'
+
+config account
+	option user '1002'
+	option password 'sw1002'
+	option server '${lan_ip}'
+	option transport 'udp'
+	option append 'regint=300;registrar=sip:${lan_ip}:5060;ptime=20'
+EOF
+	# 无 sip_listen：5060 由 Asterisk voip/LAN 双绑定占用，baresip 用随机源端口
+	cat > /etc/baresip/config <<EOF
+module_path		/usr/lib/baresip/modules
+module		account.so
+module		g711.so
+module		menu.so
+module		ctrl_tcp.so
+ctrl_tcp_listen		${lan_ip}:4444
+audio_player		null,null
+audio_source		null,null
+audio_alert		null,null
+sip_transports		udp
+EOF
+
+	# Asterisk 承载 IMS 注册；确保 UCI 启用（OpenWrt init 走 /etc/config/asterisk）
+	uci -q set asterisk.general.enabled='1'
+	uci -q set asterisk.general.interface='voip'
+	uci -q commit asterisk
+	/etc/init.d/asterisk enable >/dev/null 2>&1 || true
+	/etc/init.d/asterisk restart >/dev/null 2>&1 || /etc/init.d/asterisk start >/dev/null 2>&1 || true
+	/etc/init.d/baresip restart >/dev/null 2>&1 || /etc/init.d/baresip start >/dev/null 2>&1 || true
+	echo "{\"ok\":true,\"msg\":\"网关模式：Asterisk 注册 IMS，baresip 注册分机 1002@${lan_ip}\"}"
+	exit 0
+fi
+
+# ---- 直通模式 ----
 sip_account=$(uci -q get onu.ims.sip_account)
 sip_password=$(uci -q get onu.ims.sip_password)
 proxy=$(uci -q get onu.ims.proxy | awk '{print $1}')
@@ -64,10 +119,6 @@ config account
 EOF
 
 # 2) 全局配置（feed 包不附带此路径，由本包供货；无 stdio.so）
-# ctrl_tcp 必须绑 LAN 地址（127.0.0.1 会导致软话机页面从浏览器连不上 4444）
-lan_ip=$(uci -q get network.lan.ipaddr || echo 127.0.0.1)
-lan_ip=${lan_ip%%/*}
-mkdir -p /etc/baresip
 cat > /etc/baresip/config <<EOF
 module_path		/usr/lib/baresip/modules
 module		account.so
@@ -82,10 +133,13 @@ ${sip_listen_line}
 sip_transports		${transport}
 EOF
 
+# 直通模式：Asterisk 让出 5060（先停后启 baresip）
+/etc/init.d/asterisk stop >/dev/null 2>&1 || true
+/etc/init.d/asterisk disable >/dev/null 2>&1 || true
 /etc/init.d/baresip restart >/dev/null 2>&1 || /etc/init.d/baresip start >/dev/null 2>&1 || true
 
 if [ "$sip_port" = "0" ]; then
-	echo "{\"ok\":true,\"msg\":\"已生成配置并重启 baresip（未绑定源端口，随机）\"}"
+	echo "{\"ok\":true,\"msg\":\"直通模式：已生成配置并重启 baresip（未绑定源端口，随机）\"}"
 else
-	echo "{\"ok\":true,\"msg\":\"已生成配置并重启 baresip（监听 ${voip_ip}:${sip_port}）\"}"
+	echo "{\"ok\":true,\"msg\":\"直通模式：已生成配置并重启 baresip（监听 ${voip_ip}:${sip_port}）\"}"
 fi

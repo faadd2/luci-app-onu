@@ -49,7 +49,42 @@ case "$1" in
 		esac
 		# JSON 转义（号码仅含数字与 *#+ 时无特殊字符，保守起见去引号）
 		uri=$(printf '%s' "$uri" | tr -d '"\\')
+
+		# b2bua 入局 UA（免注册 LAN 账户）存在时，menu 的当前 UA 恒为它，
+		# 直接 dial 会以 swphone@... 为 From 被 SBC 403。拨号前临时摘除该 UA
+		# （menu 当前 UA 回落到 IMS 账户），拨号成功发出后立即 uanew 复原。
+		# 代价：摘除窗口（<1s）内打到 LAN 入局 UA 的来电会漏接（interim 接受）。
+		in_aor=""
+		in_uri=""
+		i=0
+		while ap=$(uci -q get baresip.@account[$i].append 2>/dev/null); do
+			[ "${ap#*b2bua=inbound}" != "$ap" ] || { i=$((i+1)); continue; }
+			u=$(uci -q get baresip.@account[$i].user 2>/dev/null)
+			s=$(uci -q get baresip.@account[$i].server 2>/dev/null)
+			t=$(uci -q get baresip.@account[$i].transport 2>/dev/null)
+			t=${t:-udp}
+			[ -n "$u" ] && [ -n "$s" ] && {
+				in_uri="sip:${u}@${s}"
+				in_aor="<sip:${u}@${s};transport=${t}>;${ap}"
+			}
+			break
+		done
+
+		[ -n "$in_uri" ] && \
+			ctrl_cmd "{\"command\":\"uadel\",\"params\":\"${in_uri}\",\"token\":\"onu-del\"}" >/dev/null
+
 		ctrl_cmd "{\"command\":\"dial\",\"params\":\"${uri}\",\"token\":\"onu\"}"
+
+		if [ -n "$in_aor" ]; then
+			sleep 1
+			ctrl_cmd "{\"command\":\"uanew\",\"params\":\"${in_aor}\",\"token\":\"onu-new\"}" >/dev/null
+			# b2bua 只在模块加载/启动时扫描 UA，uanew 新建的入局 UA 不会被
+			# 自动挂钩（/b2bua 的 inbound 为空）；重载模块使其重新扫描两个 UA。
+			sleep 1
+			ctrl_cmd '{"command":"rmmod","params":"b2bua","token":"onu-rm"}' >/dev/null
+			sleep 1
+			ctrl_cmd '{"command":"insmod","params":"b2bua","token":"onu-in"}' >/dev/null
+		fi
 		;;
 	answer)
 		ctrl_cmd '{"command":"accept","token":"onu"}'
