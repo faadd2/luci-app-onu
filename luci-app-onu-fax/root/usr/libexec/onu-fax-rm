@@ -1,0 +1,17 @@
+#!/bin/sh
+# onu-fax-rm <box> <file> — 删除传真文件
+# box: inbox | outbox | sent
+BASE=/overlay/fax
+BOX="$1"
+FILE="$2"
+
+case "$BOX" in
+    inbox|outbox|sent) ;;
+    *) echo '{"ok":false,"msg":"bad box"}'; exit 1 ;;
+esac
+
+case "$FILE" in
+    *[!A-Za-z0-9._-]*|*..*) echo '{"ok":false,"msg":"bad filename"}'; exit 1 ;;
+esac
+
+rm -f "$BASE/$BOX/$FILE" && echo '{"ok":true}' || echo '{"ok":false,"msg":"rm failed"}'

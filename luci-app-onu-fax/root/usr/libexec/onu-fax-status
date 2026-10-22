@@ -1,0 +1,46 @@
+#!/bin/sh
+# onu-fax-status — 传真收件箱/发件箱清单（LuCI file exec 调用，输出 JSON）
+
+BASE=/overlay/fax
+
+list_box() {
+    local dir="$1"
+    local first=1
+    printf '['
+    if [ -d "$dir" ]; then
+        for f in "$dir"/*.tif; do
+            [ -e "$f" ] || continue
+            local name size mtime
+            name=$(basename "$f")
+            size=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
+            [ -n "$size" ] || size=0
+            mtime=$(date -r "$f" +%s 2>/dev/null)
+            [ -n "$mtime" ] || mtime=0
+            [ $first -eq 0 ] && printf ','
+            first=0
+            printf '{"name":"%s","size":"%s","mtime":"%s"}' "$name" "$size" "$mtime"
+        done
+    fi
+    printf ']'
+}
+
+log_tail() {
+    local f="$1"
+    printf '['
+    if [ -f "$f" ]; then
+        tail -10 "$f" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/"/' -e 's/$/",/' | sed '$ s/,$//'
+    fi
+    printf ']'
+}
+
+printf '{"inbox":'
+list_box "$BASE/inbox"
+printf ',"outbox":'
+list_box "$BASE/outbox"
+printf ',"sent":'
+list_box "$BASE/sent"
+printf ',"inbox_log":'
+log_tail "$BASE/inbox/inbox.log"
+printf ',"sent_log":'
+log_tail "$BASE/sent/sent.log"
+printf '}\n'

@@ -1,0 +1,19 @@
+#!/bin/sh
+# onu-fax-get <box> <file> — 输出 TIFF 的 base64（LuCI 下载用）
+# box: inbox | sent
+BASE=/overlay/fax
+BOX="$1"
+FILE="$2"
+
+case "$BOX" in
+    inbox|outbox|sent) ;;
+    *) echo '{"ok":false,"msg":"bad box"}'; exit 1 ;;
+esac
+
+case "$FILE" in
+    *[!A-Za-z0-9._-]*|*..*) echo '{"ok":false,"msg":"bad filename"}'; exit 1 ;;
+esac
+
+P="$BASE/$BOX/$FILE"
+[ -f "$P" ] || { echo '{"ok":false,"msg":"not found"}'; exit 1; }
+base64 "$P"

@@ -1,0 +1,24 @@
+#!/bin/sh
+# onu-fax-put <target-name> — 把前端上传到 /tmp/fax_upload.b64 的 base64 解码进 outbox
+# 调用约定：前端先 fs.write('/tmp/fax_upload.b64', base64)，再 exec 本脚本
+BASE=/overlay/fax
+NAME="$1"
+
+case "$NAME" in
+    *.tif|*.tiff) ;;
+    *) echo '{"ok":false,"msg":"只允许 .tif/.tiff 文件"}'; exit 1 ;;
+esac
+case "$NAME" in
+    *[!A-Za-z0-9._-]*|*..*) echo '{"ok":false,"msg":"bad filename"}'; exit 1 ;;
+esac
+
+SRC=/tmp/fax_upload.b64
+[ -f "$SRC" ] || { echo '{"ok":false,"msg":"no upload data"}'; exit 1; }
+
+mkdir -p "$BASE/outbox"
+base64 -d "$SRC" > "$BASE/outbox/$NAME" 2>/dev/null
+rc=$?
+rm -f "$SRC"
+[ $rc -eq 0 ] && [ -s "$BASE/outbox/$NAME" ] \
+    && echo "{\"ok\":true,\"msg\":\"已存入发件箱：$NAME\"}" \
+    || { rm -f "$BASE/outbox/$NAME"; echo '{"ok":false,"msg":"base64 解码失败"}'; }

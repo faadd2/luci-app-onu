@@ -1,0 +1,36 @@
+#!/bin/sh
+# onu-fax-send <number> <file> — 生成 Asterisk .call 文件，经 IMS 外发传真
+BASE=/overlay/fax
+NUM="$1"
+FILE="$2"
+
+# 号码：纯数字，可加前导 0/00/+（+ 转 00）
+case "$NUM" in
+    +*) NUM="00${NUM#+}" ;;
+esac
+case "$NUM" in
+    ''|*[!0-9]*) echo '{"ok":false,"msg":"号码无效"}'; exit 1 ;;
+esac
+
+case "$FILE" in
+    *.tif|*.tiff) ;;
+    *) echo '{"ok":false,"msg":"只允许 .tif/.tiff 文件"}'; exit 1 ;;
+esac
+case "$FILE" in
+    *[!A-Za-z0-9._-]*|*..*) echo '{"ok":false,"msg":"bad filename"}'; exit 1 ;;
+esac
+
+P="$BASE/outbox/$FILE"
+[ -f "$P" ] || { echo '{"ok":false,"msg":"发件箱无此文件"}'; exit 1; }
+
+CALL=/var/spool/asterisk/outgoing/fax-$(date +%s)-$$.call
+cat > "$CALL" <<EOF
+Channel: PJSIP/ims-endpoint/sip:${NUM}@bj.ims.chinaunicom.cn
+Context: fax-out
+Extension: s
+Priority: 1
+SetVar: FAXFILE=${P}
+Archive: yes
+EOF
+chown asterisk:asterisk "$CALL" 2>/dev/null
+echo '{"ok":true,"msg":"已提交发送，结果见发件记录"}'

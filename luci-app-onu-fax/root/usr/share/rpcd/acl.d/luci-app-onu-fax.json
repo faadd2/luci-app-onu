@@ -1,0 +1,29 @@
+{
+	"luci-app-onu-fax": {
+		"description": "Grant access to ONU 传真 module",
+		"read": {
+			"ubus": {
+				"file": [
+					"exec"
+				]
+			},
+			"file": {
+				"/usr/libexec/onu-fax-status": [ "exec" ],
+				"/usr/libexec/onu-fax-get *": [ "exec" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"file": [
+					"exec",
+					"write"
+				]
+			},
+			"file": {
+				"/usr/libexec/onu-fax-rm *": [ "exec" ],
+				"/usr/libexec/onu-fax-put *": [ "exec" ],
+				"/usr/libexec/onu-fax-send *": [ "exec" ]
+			}
+		}
+	}
+}
