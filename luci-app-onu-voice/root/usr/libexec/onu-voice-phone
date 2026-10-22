@@ -42,9 +42,19 @@ case "$1" in
 		case "$uri" in
 			sip:*|tel:*) ;;
 			*)
-				proxy=$(uci -q get onu.ims.proxy | awk '{print $1}')
-				[ -z "$proxy" ] && proxy="10.203.255.17"
-				uri="sip:${uri}@${proxy}"
+				gw_mode=$(uci -q get onu.ims.gw_mode)
+				[ -z "$gw_mode" ] && gw_mode="direct"
+				if [ "$gw_mode" = "gateway" ]; then
+					# 网关模式：所有拨号经 Asterisk（内部分机/外部号码统一打 LAN 地址）
+					lan_ip=$(uci -q get network.lan.ipaddr | cut -d/ -f1)
+					[ -z "$lan_ip" ] && lan_ip="192.168.1.1"
+					uri="sip:${uri}@${lan_ip}"
+				else
+					# 直通模式：bare 号码拼到 IMS 代理（历史行为）
+					proxy=$(uci -q get onu.ims.proxy | awk '{print $1}')
+					[ -z "$proxy" ] && proxy="10.203.255.17"
+					uri="sip:${uri}@${proxy}"
+				fi
 				;;
 		esac
 		# JSON 转义（号码仅含数字与 *#+ 时无特殊字符，保守起见去引号）
