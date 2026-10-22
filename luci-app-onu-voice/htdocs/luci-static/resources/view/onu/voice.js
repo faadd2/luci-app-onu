@@ -149,31 +149,24 @@ return view.extend({
 
 		/* ---- Map 4: 分机身份（调试页展示，保存时由 onu-voice-apply 生成 pjsip.conf）---- */
 		var extm = new form.Map('onu', '分机身份（仅网关模式）',
-			'PC 客户端（如 MicroSIP）与网页软话机注册 Asterisk 用的分机号与密码。保存后自动重写 Asterisk 配置并重启服务；分机号须为 10XX（与内部分机互拨规则匹配）。');
+			'客户端注册 Asterisk 用的分机表：num=分机号（10XX，与内部分机互拨规则匹配）、pass=密码、role=web 行为网页软话机（唯一，baresip 注册该行），其余行为普通客户端（PC 软话机等），入局全部同振。保存后自动重写 Asterisk 配置并重启服务。');
 		extm.readonly = !L.hasViewPermission();
 
-		var exts = extm.section(form.NamedSection, 'ims', 'onu_ims', '分机参数');
-		exts.addremove = false;
+		var exts = extm.section(form.GridSection, 'onu_ext', '分机参数');
+		exts.anonymous = true;
+		exts.addremove = true;
+		exts.sortable = true;
 
-		o = exts.option(form.Value, 'ext_pc', 'PC 客户端分机号');
+		o = exts.option(form.Value, 'num', '分机号');
 		o.datatype = 'uinteger';
-		o.placeholder = '1001';
-		o.default = '1001';
 
-		o = exts.option(form.Value, 'ext_pc_pass', 'PC 客户端密码');
+		o = exts.option(form.Value, 'pass', '密码');
 		o.password = true;
-		o.placeholder = 'sw1001';
-		o.default = 'sw1001';
 
-		o = exts.option(form.Value, 'ext_web', '网页软话机分机号');
-		o.datatype = 'uinteger';
-		o.placeholder = '1002';
-		o.default = '1002';
-
-		o = exts.option(form.Value, 'ext_web_pass', '网页软话机密码');
-		o.password = true;
-		o.placeholder = 'sw1002';
-		o.default = 'sw1002';
+		o = exts.option(form.ListValue, 'role', '角色');
+		o.value('web', '网页软话机');
+		o.value('pc', 'PC 客户端');
+		o.value('other', '其他');
 
 		/* ---- Map 5: 本机黄页 ---- */
 		var pbm = new form.Map('onu', '本机黄页', '来电/去电号码匹配后显示姓名（仅保存在本机）。');
@@ -213,7 +206,7 @@ return view.extend({
 			E('h3', {}, '模式与分机'),
 			E('p', { 'class': 'cbi-section-descr' },
 				'直通：网页软话机与 IMS 单线直连（联通单注册互踢，PC 软话机不可同时在线）。网关：Asterisk 作 SIP 服务器，来电 PC/网页同振，多客户端可同时在线；IMS 注册由 Asterisk 承担。切换后配置生效需数秒。'),
-			E('div', { 'style': 'margin:0.5em 0' }, [
+			E('div', { 'style': 'text-align:center;margin:0.8em 0' }, [
 				'工作模式：',
 				E('select', { 'id': 'onu-voice-mode', 'class': 'cbi-input-select' }, [
 					E('option', { 'value': 'direct', 'selected': _gw0 === 'direct' }, '直通（baresip 直注 IMS）'),
@@ -288,6 +281,7 @@ return view.extend({
 					return pbm.render().then(function(pbNode) {
 						return extm.render().then(function(extNode) {
 							this.refreshStatus();
+							this.refreshPhone();
 
 							var extWrap = this.modeBox.querySelector('#onu-voice-ext-wrap');
 							if (extWrap)

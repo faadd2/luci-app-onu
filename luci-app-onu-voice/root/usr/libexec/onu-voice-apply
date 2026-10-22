@@ -1,5 +1,6 @@
 #!/bin/sh
-# onu-voice-apply — 从 UCI onu.ims 生成 baresip/asterisk 配置并重启服务（支持直通/网关两种模式）
+# onu-voice-apply — 从 UCI onu.ims / onu.@onu_ext 生成 baresip/asterisk 配置并重启服务
+# （支持直通/网关两种模式）
 # 思路2（10-19 实机验证通过）：不再自带 init.d/baresip（与 feed 包同路径冲突），
 # 改为生成官方 init 消费的 UCI（/etc/config/baresip）+ 全局配置（/etc/baresip/config），
 # 由 feed 官方 init.d/baresip 承载服务（procd、respawn、user baresip）。
@@ -9,18 +10,20 @@
 #                 sip_listen 绑 voip 口 IP:5060（SBC 对随机源端口完全沉默）。
 #   gateway（网关）：Asterisk 注册 IMS 并作为 SIP 服务器；baresip 注册为网页分机，
 #                 Asterisk 不校验源端口，baresip 不绑 sip_listen（5060 归 Asterisk）。
-#                 分机身份 = UCI onu.ims.ext_pc/ext_pc_pass（PC 客户端）与
-#                 ext_web/ext_web_pass（网页软话机），缺省 1001/sw1001、1002/sw1002；
+#                 分机身份 = onu.@onu_ext[] 表（num/pass/role；role=web 是网页软话机，
+#                 其余为普通客户端），缺省两行 1001/sw1001(pc) + 1002/sw1002(web)；
 #                 pjsip.conf 与 extensions.conf 每次应用时由本脚本重生成。
-# 注意：配置不加载 stdio.so——实机验证它与 procd /dev/null 标准输入组合会致
+# 注意1：配置不加载 stdio.so——实机验证它与 procd /dev/null 标准输入组合会致
 # baresip 每 ~50s 静默退出（epoll fd0 EPERM）。
-set -e
+# 注意2：本脚本不用 set -e——dash 下「变量=$(uci -q get 缺省选项)」会使脚本静默
+# 退出（2026-10-22 实证坑，曾致切换网关静默失败），缺省值一律用显式回退。
+set +e
 
 gw_mode=$(uci -q get onu.ims.gw_mode)
 [ -z "$gw_mode" ] && gw_mode="direct"
 
 # ctrl_tcp 必须绑 LAN 地址（127.0.0.1 会导致软话机页面从浏览器连不上 4444）
-lan_ip=$(uci -q get network.lan.ipaddr || echo 127.0.0.1)
+lan_ip=$(uci -q get network.lan.ipaddr 2>/dev/null || echo 127.0.0.1)
 lan_ip=${lan_ip%%/*}
 mkdir -p /etc/baresip
 
@@ -28,16 +31,10 @@ if [ "$gw_mode" = "gateway" ]; then
 	# ---- 网关模式 ----
 	[ -x /etc/init.d/asterisk ] || { echo '{"ok":false,"msg":"未安装 Asterisk（gateway 模式依赖 apk asterisk）"}'; exit 1; }
 
-	# 分机身份（缺省 1001/sw1001、1002/sw1002）
-	ext_pc=$(uci -q get onu.ims.ext_pc);      ext_pc=${ext_pc:-1001}
-	ext_pc_pass=$(uci -q get onu.ims.ext_pc_pass); ext_pc_pass=${ext_pc_pass:-sw1001}
-	ext_web=$(uci -q get onu.ims.ext_web);     ext_web=${ext_web:-1002}
-	ext_web_pass=$(uci -q get onu.ims.ext_web_pass); ext_web_pass=${ext_web_pass:-sw1002}
-
 	# IMS 账号参数（与直通模式同源，pjsip.conf 由这里生成）
-	sip_account=$(uci -q get onu.ims.sip_account)
-	sip_password=$(uci -q get onu.ims.sip_password)
-	proxy=$(uci -q get onu.ims.proxy | awk '{print $1}')
+	sip_account=$(uci -q get onu.ims.sip_account 2>/dev/null)
+	sip_password=$(uci -q get onu.ims.sip_password 2>/dev/null)
+	proxy=$(uci -q get onu.ims.proxy 2>/dev/null | awk '{print $1}')
 	[ -z "$sip_account" ] && { echo '{"ok":false,"msg":"未配置 SIP 账号"}'; exit 1; }
 	[ -z "$sip_password" ] && { echo '{"ok":false,"msg":"未配置 SIP 密码"}'; exit 1; }
 	[ -z "$proxy" ] && proxy="10.203.255.17"
@@ -46,27 +43,85 @@ if [ "$gw_mode" = "gateway" ]; then
 	[ "$ims_dom" = "$sip_account" ] && ims_dom="bj.ims.chinaunicom.cn"
 
 	# voip 口 IP（asterisk transport 绑定用；AOR host 必须是域名形式，见 pjsip 注释）
-	voip_dev=$(uci -q get network.voip.device)
+	voip_dev=$(uci -q get network.voip.device 2>/dev/null)
 	voip_dev=${voip_dev:-pon0.3010}
 	voip_ip=$(ip -4 addr show dev "$voip_dev" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
 	if [ -z "$voip_ip" ]; then
-		ifup voip 2>/dev/null || true
+		ifup voip 2>/dev/null
 		sleep 3
 		voip_ip=$(ip -4 addr show dev "$voip_dev" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
 	fi
 	[ -z "$voip_ip" ] && { echo '{"ok":false,"msg":"voip 接口无 IP，无法绑定 Asterisk transport"}'; exit 1; }
 
+	# ---- 分机身份表：缺省补两行（1001 pc + 1002 web）----
+	uci -q get onu.@onu_ext[0].num >/dev/null 2>&1 || {
+		s=$(uci add onu onu_ext 2>/dev/null)
+		uci set onu."$s".num='1001' 2>/dev/null
+		uci set onu."$s".pass='sw1001' 2>/dev/null
+		uci set onu."$s".role='pc' 2>/dev/null
+		s=$(uci add onu onu_ext 2>/dev/null)
+		uci set onu."$s".num='1002' 2>/dev/null
+		uci set onu."$s".pass='sw1002' 2>/dev/null
+		uci set onu."$s".role='web' 2>/dev/null
+		uci commit onu 2>/dev/null
+	}
+
+	# 遍历分机表（按索引，避免分隔符转义问题）
+	endpoints_block=""
+	dial_group=""
+	web_num=""
+	web_pass=""
+	i=0
+	while :; do
+		num=$(uci -q get onu.@onu_ext[$i].num 2>/dev/null)
+		[ $? -ne 0 ] && break
+		j=$i
+		i=$((i+1))
+		[ -z "$num" ] && continue
+		pass=$(uci -q get onu.@onu_ext[$j].pass 2>/dev/null)
+		role=$(uci -q get onu.@onu_ext[$j].role 2>/dev/null)
+		[ -z "$pass" ] && pass="sw${num}"
+		[ -z "$role" ] && role="pc"
+		[ "$role" = "web" ] && { web_num=$num; web_pass=$pass; }
+		[ -n "$dial_group" ] && dial_group="${dial_group}&"
+		dial_group="${dial_group}PJSIP/${num}"
+		endpoints_block="${endpoints_block}
+[${num}]
+type=aor
+max_contacts=1
+remove_existing=yes
+
+[${num}]
+type=auth
+auth_type=userpass
+username=${num}
+password=${pass}
+
+[${num}]
+type=endpoint
+context=from-internal
+aors=${num}
+auth=${num}
+transport=transport-udp-lan
+allow=!all,alaw,ulaw
+rtp_symmetric=yes
+force_rport=yes
+rewrite_contact=yes
+"
+	done
+	[ -z "$web_num" ] && { echo '{"ok":false,"msg":"分机表缺少 role=web 的网页软话机分机（请勿删除该行）"}'; exit 1; }
+
 	# ---- 生成 /etc/asterisk/pjsip.conf（无 ${} 内容，可直接变量展开）----
 	[ -f /etc/asterisk/pjsip.conf ] && [ ! -f /root/pjsip.conf.bak ] && cp -a /etc/asterisk/pjsip.conf /root/pjsip.conf.bak
 	match_lines=""
-	for pip in $(uci -q get onu.ims.proxy); do
+	for pip in $(uci -q get onu.ims.proxy 2>/dev/null); do
 		match_lines="${match_lines}match=${pip}
 "
 	done
 	[ -z "$match_lines" ] && match_lines="match=${proxy}
 "
 	cat > /etc/asterisk/pjsip.conf <<EOF
-; pjsip.conf — 由 onu-voice-apply 生成（勿手改；UIM 语音>调试页管理分机身份）
+; pjsip.conf — 由 onu-voice-apply 生成（勿手改；语音>调试页管理分机身份）
 ; 实证约束（build-8/15）：SBC 要求源地址绑 voip 口、源端口固定 5060；
 ; R-URI 必须域名形式 sip:${ims_dom}（IP 形式 403、域名+端口 480）；
 ; UA 伪装 PT1570 原厂默认（SBC 实测无 UA 校验，防御性保留）。
@@ -120,56 +175,14 @@ allow=!all,alaw,ulaw
 type=identify
 endpoint=ims-endpoint
 ${match_lines}
-[${ext_pc}]
-type=aor
-max_contacts=1
-remove_existing=yes
-
-[${ext_pc}]
-type=auth
-auth_type=userpass
-username=${ext_pc}
-password=${ext_pc_pass}
-
-[${ext_pc}]
-type=endpoint
-context=from-internal
-aors=${ext_pc}
-auth=${ext_pc}
-transport=transport-udp-lan
-allow=!all,alaw,ulaw
-rtp_symmetric=yes
-force_rport=yes
-rewrite_contact=yes
-
-[${ext_web}]
-type=aor
-max_contacts=1
-remove_existing=yes
-
-[${ext_web}]
-type=auth
-auth_type=userpass
-username=${ext_web}
-password=${ext_web_pass}
-
-[${ext_web}]
-type=endpoint
-context=from-internal
-aors=${ext_web}
-auth=${ext_web}
-transport=transport-udp-lan
-allow=!all,alaw,ulaw
-rtp_symmetric=yes
-force_rport=yes
-rewrite_contact=yes
+; ---- LAN 分机（来自 onu.@onu_ext 表）----${endpoints_block}
 EOF
 
 	# ---- 生成 /etc/asterisk/extensions.conf（含 \${} 拨号变量，引号 heredoc + sed 占位）----
 	[ -f /etc/asterisk/extensions.conf ] && [ ! -f /root/extensions.conf.bak ] && cp -a /etc/asterisk/extensions.conf /root/extensions.conf.bak
 	cat > /etc/asterisk/extensions.conf <<'EOF'
 ; extensions.conf — 由 onu-voice-apply 生成（勿手改）
-; from-internal：LAN 客户端（分机 __EXT_PC__/__EXT_WEB__，10XX 内部分机互拨）
+; from-internal：LAN 分机（10XX 内部分机互拨）；其余号码经 IMS trunk 出局
 ; from-trunk：IMS 入局（含传真检测）；fax-out：.call 文件触发的发传真
 
 [from-internal]
@@ -183,7 +196,7 @@ exten => _X.,3,Hangup()
 [from-trunk]
 exten => _[+0-9*#].,1,Progress()
 exten => _[+0-9*#].,n,Set(FAXOPT(faxdetect)=yes)
-exten => _[+0-9*#].,n,Dial(PJSIP/__EXT_PC__&PJSIP/__EXT_WEB__,30)
+exten => _[+0-9*#].,n,Dial(__EXT_GROUP__,30)
 exten => _[+0-9*#].,n,Hangup()
 
 exten => i,1,Hangup()
@@ -209,20 +222,21 @@ exten => s,n,Hangup()
 exten => h,1,System(echo "OUT ${STRFTIME(${EPOCH},,%Y-%m-%d %H:%M:%S)} status=${FAXSTATUS} pages=${FAXPAGES:-0} file=${FAXFILE}" >> /overlay/fax/sent/sent.log)
 exten => h,n,ExecIf($["${FAXFILE}"!=""]?System(mv "${FAXFILE}" /overlay/fax/sent/ 2>/dev/null))
 EOF
-	# 占位符替换（值仅含数字与 +*#，sed 安全）
-	sed -i -e "s/__EXT_PC__/${ext_pc}/g" -e "s/__EXT_WEB__/${ext_web}/g" \
-	       -e "s/__CID_USER__/${user_part}/g" -e "s/__IMS_DOM__/${ims_dom}/g" \
+	# 占位符替换（& 在 sed 替换串中是特殊符，先转义）
+	dial_esc=$(printf '%s' "$dial_group" | sed 's/[&/\]/\\&/g')
+	sed -i -e "s/__EXT_GROUP__/${dial_esc}/g" -e "s/__CID_USER__/${user_part}/g" \
+	       -e "s/__IMS_DOM__/${ims_dom}/g" \
 	       /etc/asterisk/extensions.conf
 
-	# baresip → Asterisk 网页分机（密码与 pjsip.conf 一致）
+	# baresip → Asterisk 网页分机（role=web 行）
 	cat > /etc/config/baresip <<EOF
 config baresip 'main'
 	option enable '1'
 	option options '-s'
 
 config account
-	option user '${ext_web}'
-	option password '${ext_web_pass}'
+	option user '${web_num}'
+	option password '${web_pass}'
 	option server '${lan_ip}'
 	option transport 'udp'
 	option append 'regint=300;registrar=sip:${lan_ip}:5060;ptime=20'
@@ -248,24 +262,26 @@ EOF
 	# 顺序约束（H-18 竞态修复）：直通模式 baresip 占用 voip_ip:5060，必须先停 baresip
 	# 释放端口，再启 Asterisk（其 transport-udp-voip 绑定同地址:5060，先占先得、失败不重试），
 	# 最后起 baresip（新配置无 sip_listen，用随机源端口注册网页分机）。
-	/etc/init.d/baresip stop >/dev/null 2>&1 || true
-	sleep 1
-	/etc/init.d/asterisk enable >/dev/null 2>&1 || true
-	/etc/init.d/asterisk restart >/dev/null 2>&1 || /etc/init.d/asterisk start >/dev/null 2>&1 || true
-	/etc/init.d/baresip start >/dev/null 2>&1 || true
-	echo "{\"ok\":true,\"msg\":\"网关模式：Asterisk 注册 IMS，网页软话机注册分机 ${ext_web}@${lan_ip}，PC 客户端注册 ${ext_pc}\"}"
+	# sleep 3 为等 baresip 的 expires=0 注销到达联通 SBC——实测不足时会撞出 486
+	# （SBC 单注册互踢）且 pjsip 视 486 为致命、停止重试，注册假死至下次 reload。
+	/etc/init.d/baresip stop >/dev/null 2>&1
+	sleep 3
+	/etc/init.d/asterisk enable >/dev/null 2>&1
+	/etc/init.d/asterisk restart >/dev/null 2>&1 || /etc/init.d/asterisk start >/dev/null 2>&1
+	/etc/init.d/baresip start >/dev/null 2>&1
+	echo "{\"ok\":true,\"msg\":\"网关模式：Asterisk 注册 IMS，网页软话机注册分机 ${web_num}@${lan_ip}，入局同振 ${dial_group}\"}"
 	exit 0
 fi
 
 # ---- 直通模式 ----
-sip_account=$(uci -q get onu.ims.sip_account)
-sip_password=$(uci -q get onu.ims.sip_password)
-proxy=$(uci -q get onu.ims.proxy | awk '{print $1}')
-reg_period=$(uci -q get onu.ims.reg_period)
-sip_port=$(uci -q get onu.ims.sip_port)
-transport=$(uci -q get onu.ims.transport)
-reg_port=$(uci -q get onu.ims.reg_port)
-ptime=$(uci -q get onu.ims.ptime)
+sip_account=$(uci -q get onu.ims.sip_account 2>/dev/null)
+sip_password=$(uci -q get onu.ims.sip_password 2>/dev/null)
+proxy=$(uci -q get onu.ims.proxy 2>/dev/null | awk '{print $1}')
+reg_period=$(uci -q get onu.ims.reg_period 2>/dev/null)
+sip_port=$(uci -q get onu.ims.sip_port 2>/dev/null)
+transport=$(uci -q get onu.ims.transport 2>/dev/null)
+reg_port=$(uci -q get onu.ims.reg_port 2>/dev/null)
+ptime=$(uci -q get onu.ims.ptime 2>/dev/null)
 
 [ -z "$sip_account" ] && { echo '{"ok":false,"msg":"未配置 SIP 账号"}'; exit 1; }
 [ -z "$sip_password" ] && { echo '{"ok":false,"msg":"未配置 SIP 密码"}'; exit 1; }
@@ -280,11 +296,11 @@ user_part=${sip_account%@*}
 server_part=${sip_account#*@}
 
 # 监听地址取 voip 口当前 IP（无则先尝试拉起接口）
-voip_dev=$(uci -q get network.voip.device)
+voip_dev=$(uci -q get network.voip.device 2>/dev/null)
 voip_dev=${voip_dev:-pon0.3010}
 voip_ip=$(ip -4 addr show dev "$voip_dev" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
 if [ -z "$voip_ip" ]; then
-	ifup voip 2>/dev/null || true
+	ifup voip 2>/dev/null
 	sleep 3
 	voip_ip=$(ip -4 addr show dev "$voip_dev" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
 fi
@@ -327,9 +343,9 @@ sip_transports		${transport}
 EOF
 
 # 直通模式：Asterisk 让出 5060（先停后启 baresip）
-/etc/init.d/asterisk stop >/dev/null 2>&1 || true
-/etc/init.d/asterisk disable >/dev/null 2>&1 || true
-/etc/init.d/baresip restart >/dev/null 2>&1 || /etc/init.d/baresip start >/dev/null 2>&1 || true
+/etc/init.d/asterisk stop >/dev/null 2>&1
+/etc/init.d/asterisk disable >/dev/null 2>&1
+/etc/init.d/baresip restart >/dev/null 2>&1 || /etc/init.d/baresip start >/dev/null 2>&1
 
 if [ "$sip_port" = "0" ]; then
 	echo "{\"ok\":true,\"msg\":\"直通模式：已生成配置并重启 baresip（未绑定源端口，随机）\"}"
