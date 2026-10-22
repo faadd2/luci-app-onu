@@ -88,6 +88,18 @@ return baseclass.extend({
 			]);
 		}
 
+		// 组装表格行：children 必须扁平——不内联 map() 结果（嵌套数组会被 E() 字符串化）
+		function fileTable(box,list,emptyText,canSend,timeCol){
+			var rows=[E('tr',{'class':'tr table-titles'},[
+				E('th',{'class':'th left'},'文件'),E('th',{'class':'th left'},'大小'),
+				E('th',{'class':'th left'},timeCol),E('th',{'class':'th left'},'操作')])];
+			if(list.length)
+				list.forEach(function(f){rows.push(fileRow(box,f,canSend));});
+			else
+				rows.push(E('tr',{'class':'tr'},E('td',{'class':'td left','colspan':'4'},emptyText)));
+			return E('table',{'class':'table'},rows);
+		}
+
 		return fs.exec_direct('/usr/libexec/onu-fax-status',[]).then(function(out){
 			var st={};try{st=JSON.parse(out)||{};}catch(e){}
 			var inbox=st.inbox||[],outbox=st.outbox||[],sent=st.sent||[];
@@ -96,13 +108,7 @@ return baseclass.extend({
 			return E('div',{},[
 				E('p',{},'Asterisk 7x24 值守收传真（T.38 / G.711 自动协商）。来电检测到传真音自动转入接收，普通电话不受影响。传真保存在设备闪存（/overlay/fax），重启不丢。'),
 				E('h3',{},'收件箱'),
-				E('table',{'class':'table'},[
-					E('tr',{'class':'tr table-titles'},[
-						E('th',{'class':'th left'},'文件'),E('th',{'class':'th left'},'大小'),
-						E('th',{'class':'th left'},'时间'),E('th',{'class':'th left'},'操作')]),
-					inbox.length?inbox.map(function(f){return fileRow('inbox',f,false);})
-						:E('tr',{'class':'tr'},E('td',{'class':'td left','colspan':'4'},'收件箱为空。收到传真后自动出现在这里。'))
-				]),
+				fileTable('inbox',inbox,'收件箱为空。收到传真后自动出现在这里。',false,'时间'),
 				E('h3',{},'发送传真'),
 				E('div',{'class':'cbi-section','style':'padding:0.5em 1em'},[
 					E('p',{},[numInput,
@@ -111,21 +117,9 @@ return baseclass.extend({
 					E('p',{'class':'cbi-value-description'},'上传 TIFF 文件并立即拨打对方传真号码；也可先留存在发件箱，之后点「发送」。')
 				]),
 				E('h4',{},'发件箱'),
-				E('table',{'class':'table'},[
-					E('tr',{'class':'tr table-titles'},[
-						E('th',{'class':'th left'},'文件'),E('th',{'class':'th left'},'大小'),
-						E('th',{'class':'th left'},'入库时间'),E('th',{'class':'th left'},'操作')]),
-					outbox.length?outbox.map(function(f){return fileRow('outbox',f,true);})
-						:E('tr',{'class':'tr'},E('td',{'class':'td left','colspan':'4'},'发件箱为空。'))
-				]),
+				fileTable('outbox',outbox,'发件箱为空。',true,'入库时间'),
 				E('h4',{},'发件记录（已发送）'),
-				E('table',{'class':'table'},[
-					E('tr',{'class':'tr table-titles'},[
-						E('th',{'class':'th left'},'文件'),E('th',{'class':'th left'},'大小'),
-						E('th',{'class':'th left'},'完成时间'),E('th',{'class':'th left'},'操作')]),
-					sent.length?sent.map(function(f){return fileRow('sent',f,false);})
-						:E('tr',{'class':'tr'},E('td',{'class':'td left','colspan':'4'},'暂无已发送传真。'))
-				]),
+				fileTable('sent',sent,'暂无已发送传真。',false,'完成时间'),
 				E('h4',{},'最近记录'),
 				E('pre',{'style':'font-size:12px'},[(st.inbox_log||[]).concat(st.sent_log||[])].join('\n')||'（无）'),
 				E('div',{'style':'margin-top:1em'},
