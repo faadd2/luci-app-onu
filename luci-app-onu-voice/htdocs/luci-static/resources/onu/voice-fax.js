@@ -1,4 +1,11 @@
 'use strict';
+/*
+ * 传真管理（语音页「传真」标签内容）。
+ * 约束：本 LuCI 模块加载器对导出执行 new——必须导出 baseclass.extend 类，
+ *       不能导出纯对象（否则报 "factory yields invalid constructor"）。
+ * 用法：'require onu.voice-fax as voicefax'; voicefax.build() -> Promise<Element>
+ */
+'require baseclass';
 'require dom';
 'require fs';
 'require ui';
@@ -8,7 +15,7 @@ function fmtTime(ep){ep=Number(ep)||0;if(!ep)return '-';var d=new Date(ep*1000);
 function b64ToBlob(b64){var bin=atob(b64);var len=bin.length;var bytes=new Uint8Array(len);for(var i=0;i<len;i++)bytes[i]=bin.charCodeAt(i);return new Blob([bytes],{type:'application/octet-stream'});}
 function fileToB64(file){return new Promise(function(res,rej){var r=new FileReader();r.onload=function(){var s=String(r.result);var i=s.indexOf(',');res(i>=0?s.slice(i+1):s);};r.onerror=rej;r.readAsDataURL(file);});}
 
-return {
+return baseclass.extend({
 	build:function(){
 		var numInput=null;
 
@@ -128,4 +135,4 @@ return {
 			return E('div',{},E('p',{'class':'label label-danger'},'传真状态读取失败：'+((err&&err.message)||err)));
 		});
 	}
-};
+});
