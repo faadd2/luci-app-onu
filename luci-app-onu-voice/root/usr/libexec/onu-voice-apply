@@ -57,9 +57,15 @@ EOF
 	uci -q set asterisk.general.enabled='1'
 	uci -q set asterisk.general.interface='voip'
 	uci -q commit asterisk
+	# 顺序约束（H-18 竞态修复）：直通模式 baresip 占用 voip_ip:5060，必须先停 baresip
+	# 释放端口，再启 Asterisk（其 transport-udp-voip 绑定同地址:5060，先占先得、失败不重试），
+	# 最后起 baresip（新配置无 sip_listen，用随机源端口注册分机 1002）。反向（网关→直通）
+	# 原脚本已是先停 Asterisk 后启 baresip，故无竞态。
+	/etc/init.d/baresip stop >/dev/null 2>&1 || true
+	sleep 1
 	/etc/init.d/asterisk enable >/dev/null 2>&1 || true
 	/etc/init.d/asterisk restart >/dev/null 2>&1 || /etc/init.d/asterisk start >/dev/null 2>&1 || true
-	/etc/init.d/baresip restart >/dev/null 2>&1 || /etc/init.d/baresip start >/dev/null 2>&1 || true
+	/etc/init.d/baresip start >/dev/null 2>&1 || true
 	echo "{\"ok\":true,\"msg\":\"网关模式：Asterisk 注册 IMS，baresip 注册分机 1002@${lan_ip}\"}"
 	exit 0
 fi
