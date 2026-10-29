@@ -166,7 +166,23 @@ return view.extend({
 		o = exts.option(form.ListValue, 'role', '角色');
 		o.value('web', '网页软话机');
 		o.value('pc', 'PC 客户端');
+		o.value('ipphone', 'IP 话机');
+		o.value('fxs', 'FXS 口话机');
+		o.value('mobile', '手机软话机');
 		o.value('other', '其他');
+
+		o = exts.option(form.DummyValue, '_status', '状态');
+		o.modalonly = false;
+		o.cfgvalue = function(sid) {
+			return E('span', {
+				'id': 'ext-status-' + sid,
+				'data-ext-status': uci.get('onu', sid, 'num') || ''
+			}, '查询中…');
+		};
+
+		o = exts.option(form.Value, 'remark', '备注');
+		o.optional = true;
+		o.placeholder = '如：客厅 FXO 网关';
 
 		/* ---- Map 5: 本机黄页 ---- */
 		var pbm = new form.Map('onu', '本机黄页', '来电/去电号码匹配后显示姓名（仅保存在本机）。');
@@ -272,7 +288,9 @@ return view.extend({
 			]),
 			this.buildKeypad()
 		]);
-		poll.add(L.bind(this.refreshPhone, this), 3000);
+		/* poll.add 弃用：该版本 LuCI 的 poll 链被回调异常杀死即永久停摆
+		 * （外部 fix-round-1 实测），改 render 后 setInterval，互独立 tick */
+		/* poll.add(L.bind(this.refreshPhone, this), 3000); */
 
 		/* ---- 渲染链 + 标签页 ---- */
 		return m.render().then(function(mapNode) {
@@ -282,10 +300,26 @@ return view.extend({
 						return extm.render().then(function(extNode) {
 							this.refreshStatus();
 							this.refreshPhone();
+							if (this._phonePoll) clearInterval(this._phonePoll);
+							this._phonePoll = setInterval(this.refreshPhone.bind(this), 3000);
+							if (this._extPoll) clearInterval(this._extPoll);
+							this._extPoll = setInterval(this.pollExtStatus.bind(this), 3000);
 
 							var extWrap = this.modeBox.querySelector('#onu-voice-ext-wrap');
 							if (extWrap)
 								dom.content(extWrap, extNode);
+
+							/* 状态格可靠注入路径：DummyValue 的 cfgvalue span 不保证进 DOM */
+							extNode.querySelectorAll('tr[data-sid]').forEach(function(tr) {
+								var sid = tr.getAttribute('data-sid');
+								var num = uci.get('onu', sid, 'num');
+								var td = tr.querySelector('td[data-name="_status"]');
+								if (td && num)
+									dom.content(td, E('span', {
+										'class': 'label label-default',
+										'data-ext-status': num
+									}, '查询中…'));
+							});
 
 							var enInput = mapNode.querySelector('[data-field$="._enable"] input[type="checkbox"]');
 							var applyVis = function() {
@@ -600,7 +634,7 @@ return view.extend({
 
 			var txt = (typeof res.data === 'string') ? res.data : '';
 			var mm = /Active calls \((\d+)\)/.exec(txt);
-			var nCalls = mm ? Number(mm[1]) : (res.response === false ? -1 : 0);
+			var nCalls = mm ? Number(mm[1]) : (res.response === true ? 0 : -1);
 
 			if (answerBtn)
 				answerBtn.style.display = /INCOMING/i.test(txt) ? '' : 'none';
@@ -620,7 +654,7 @@ return view.extend({
 
 			var calls = [];
 			var re = /(INCOMING|OUTGOING|RINGING|ESTABLISHED)/gi;
-			var uriRe = /(?:sip|tel):([+0-9][0-9*#+]{4,})/g;
+			var uriRe = /(?:sip|tel):([+0-9][0-9*#+]{3,})/g;
 			var states = [];
 			var m;
 			while ((m = re.exec(txt)))
@@ -652,6 +686,12 @@ return view.extend({
 			this._pl = this._pl || (typeof phoneloc === 'function' ? new phoneloc() : phoneloc);
 
 			var pb = {};
+			/* 号码本扩充：分机表备注/角色名 > 黄页（外部 fix-round-1） */
+			var roleName = { web: '网页软话机', pc: 'PC 话机', ipphone: 'IP 话机', fxs: 'FXS 话机', mobile: '手机软话机', other: '其他分机' };
+			uci.sections('onu', 'onu_ext', function(s) {
+				if (s.num)
+					pb[String(s.num).replace(/[^\d]/g, '')] = s.name || roleName[s.role] || ('分机 ' + s.num);
+			});
 			uci.sections('onu', 'phonebook', function(s) {
 				if (s.number && s.name)
 					pb[String(s.number).replace(/[^\d]/g, '')] = s.name;
@@ -660,6 +700,11 @@ return view.extend({
 			var jobs = calls.map(function(c) {
 				var d = String(c.num || '').replace(/[^\d]/g, '');
 				c.name = pb[d] || pb[d.substring(d.length - 11)] || '';
+				/* 短号（<5 位）直接标分机，跳过 phoneloc 归属地查询 */
+				if (d.length > 0 && d.length < 5) {
+					c.loc = '分机';
+					return Promise.resolve(c);
+				}
 				return this._pl.lookup(c.num).then(function(loc) {
 					c.loc = loc;
 					return c;
@@ -717,6 +762,27 @@ return view.extend({
 			return Promise.all(jobs).then(renderKids);
 		}.bind(this)).catch(function(err) {
 			dom.content(box, E('p', { 'class': 'label label-danger' }, '状态刷新失败：' + ((err && err.message) || err)));
+		});
+	},
+
+	/* 分机状态轮询：onu-voice-extstatus awk 解析 pjsip show contacts → JSON */
+	pollExtStatus: function() {
+		return fs.exec_direct('/usr/libexec/onu-voice-extstatus').then(function(out) {
+			var st = {};
+			try { st = JSON.parse(out); } catch (e) {}
+			var labelMap = {
+				'Avail':       ['在线', 'label label-success'],
+				'NonQual':     ['在线', 'label label-success'],
+				'Unavailable': ['离线', 'label label-danger']
+			};
+			document.querySelectorAll('[data-ext-status]').forEach(function(el) {
+				var num = el.getAttribute('data-ext-status');
+				var s = num ? st[num] : null;
+				var l = s ? (labelMap[s] || [s, 'label'])
+				          : ['未注册', 'label label-default'];
+				el.setAttribute('class', l[1]);
+				el.textContent = l[0];
+			});
 		});
 	}
 });

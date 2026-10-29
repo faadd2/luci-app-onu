@@ -1,0 +1,12 @@
+#!/bin/sh
+asterisk -rx "pjsip show contacts" 2>/dev/null | awk '
+BEGIN { printf "{" }
+/^  Contact:/ {
+    split($2, a, "/"); aor = a[1]; st = $4;
+    gsub(/^[ \t]+|[ \t]+$/, "", aor); gsub(/^[ \t]+|[ \t]+$/, "", st);
+    if (aor ~ /^[0-9]+$/ && st != "") {
+        if (n++) printf ",";
+        printf "\"%s\":\"%s\"", aor, st;
+    }
+}
+END { printf "}\n" }'

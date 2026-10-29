@@ -32,6 +32,8 @@
 			"file": {
 				"/usr/libexec/onu-voice-apply": [ "exec" ],
 				"/usr/libexec/onu-voice-phone *": [ "exec" ],
+				"/usr/libexec/onu-voice-extstatus *": [ "exec" ],
+				"/usr/libexec/onu-voice-extstatus": [ "exec" ],
 				"/etc/init.d/baresip *": [ "exec" ]
 			}
 		}

@@ -13,7 +13,7 @@ ctrl_cmd() {
 	local payload="$1" len
 	len=$(printf '%s' "$payload" | wc -c)
 	printf '%s:%s,' "$len" "$payload" \
-		| { cat; sleep 0.3; } \
+		| { cat; sleep 1; } \
 		| timeout 2 nc "$CTRL_HOST" $CTRL_PORT 2>/dev/null \
 		| tr -d '\000' \
 		| awk '
