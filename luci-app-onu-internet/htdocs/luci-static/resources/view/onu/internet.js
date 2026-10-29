@@ -33,6 +33,71 @@ function applyUci() {
 	});
 }
 
+/*
+ * B11 桥接模式辅助（2026-10-29 S1）
+ * 纯桥透传：ONU 本机不拨号（wan.proto=none + 自定义 mode='bridge' 标记），
+ * 新增 br-wan（pon0.<vlan> + lan2/3/4）代打业务 tag，br-lan 缩到 lan1(2.5G) 保管理面。
+ * 全部走 uci.apply + ubus network reload（现页「仅重载」路径），无 restart/不碰 eth0。
+ */
+
+function isBridgeMode() {
+	return uci.get('network', 'wan', 'mode') === 'bridge';
+}
+
+function parseVid(device) {
+	var m = /^(pon0)\.(\d{1,4})$/.exec(device || '');
+	return m ? m[2] : '';
+}
+
+function findDevSec(name) {
+	var id = null;
+	uci.sections('network', 'device', function(sec) {
+		if (sec.name === name) id = sec['.name'];
+	});
+	return id;
+}
+
+/* 进入桥接：mode 标记 + br-wan 段（继承原 pon0_<vid> MAC，OLT 侧绑定不破）+ br-lan 缩口 */
+function applyBridgeUci(vid) {
+	var devName = 'pon0.' + vid;
+	uci.set('network', 'wan', 'proto', 'none');
+	uci.set('network', 'wan', 'mode', 'bridge');
+
+	var macSec = findDevSec(devName) || findDevSec(uci.get('network', 'wan', 'device') || '');
+	var mac = macSec ? uci.get('network', macSec, 'macaddr') : null;
+
+	if (!uci.get('network', 'br_wan'))
+		uci.add('network', 'device', 'br_wan');
+	uci.set('network', 'br_wan', 'type', 'bridge');
+	uci.set('network', 'br_wan', 'name', 'br-wan');
+	uci.set('network', 'br_wan', 'ports', [devName, 'lan2', 'lan3', 'lan4']);
+	if (mac) uci.set('network', 'br_wan', 'macaddr', mac);
+
+	var brlan = findDevSec('br-lan');
+	if (brlan) uci.set('network', brlan, 'ports', ['lan1']);
+}
+
+/* 退出桥接：清 mode/br_wan，br-lan 恢复 lan1-4（账号等字段留在 uci，免重填） */
+function removeBridgeUci() {
+	uci.remove('network', 'wan', 'mode');
+	if (uci.get('network', 'br_wan'))
+		uci.remove('network', 'br_wan');
+	var brlan = findDevSec('br-lan');
+	if (brlan) uci.set('network', brlan, 'ports', ['lan1', 'lan2', 'lan3', 'lan4']);
+}
+
+/* cfg-bak 惯例（同目标不覆盖，带时间戳）；失败不阻断保存链 */
+function cfgBak(tag) {
+	var d = new Date();
+	function pad(n) { return (n < 10 ? '0' : '') + n; }
+	var stamp = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) +
+		'-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+	return L.resolveDefault(
+		fs.exec_direct('/bin/cp', ['/etc/config/network',
+			'/etc/config/network.bak-' + tag + '-' + stamp]), '')
+		.catch(function() {});
+}
+
 return view.extend({
 	load: function() {
 		return L.resolveDefault(fs.exec_direct('/sbin/ifstatus', ['wan']), '{}');
@@ -49,27 +114,59 @@ return view.extend({
 		var en = s.option(form.Flag, '_enable', '启用上网线路');
 		en.cfgvalue = function() {
 			var p = uci.get('network', 'wan', 'proto');
-			return (p && p !== 'none') ? '1' : '0';
+			return ((p && p !== 'none') || isBridgeMode()) ? '1' : '0';
 		};
 		en.write = function(sectionId, value) {
 			if (value !== '1') {
 				uci.set('network', 'wan', 'proto', 'none');
+				removeBridgeUci();
 			}
-			else if (!uci.get('network', 'wan', 'proto') || uci.get('network', 'wan', 'proto') === 'none') {
+			else if (!isBridgeMode() &&
+				(!uci.get('network', 'wan', 'proto') || uci.get('network', 'wan', 'proto') === 'none')) {
 				uci.set('network', 'wan', 'proto', 'pppoe');
 			}
 		};
 		en.remove = function() {};
 
-		var o = s.option(form.ListValue, 'proto', '上网方式');
-		o.value('pppoe', 'PPPoE 拨号');
-		o.value('dhcp', 'DHCP 客户端');
-		o.depends('_enable', '1');
+		var protoOpt = s.option(form.ListValue, 'proto', '上网方式');
+		protoOpt.value('pppoe', 'PPPoE 拨号');
+		protoOpt.value('dhcp', 'DHCP 客户端');
+		protoOpt.value('bridge', '桥接模式（下游设备拨号）');
+		protoOpt.depends('_enable', '1');
+		protoOpt.cfgvalue = function() {
+			if (isBridgeMode())
+				return 'bridge';
+			return uci.get('network', 'wan', 'proto') || '';
+		};
+		/* 虚拟值 'bridge' 映射为 uci proto='none' + mode='bridge' + br_wan/br-lan 端口变更；
+		 * VLAN 与桥接同页同时改时，以表单当前值为准拼 br-wan 端口 */
+		protoOpt.write = function(sectionId, value) {
+			if (value === 'bridge') {
+				var vid = parseVid(uci.get('network', 'wan', 'device') || '');
+				var fv = selfRef.vlanOpt ? selfRef.vlanOpt.formvalue(sectionId) : '';
+				if (fv) vid = String(fv);
+				if (!vid) vid = '3961';
+				applyBridgeUci(vid);
+			}
+			else {
+				uci.set('network', 'wan', 'proto', value);
+				if (isBridgeMode())
+					removeBridgeUci();
+			}
+		};
+		protoOpt.remove = function() {};
 
-		o = onuvlan.addOption(s, 'wan', '上网 VLAN ID',
+		o = s.option(form.DummyValue, '_bridge_hint', '桥接说明');
+		o.depends('proto', 'bridge');
+		o.cfgvalue = function() {
+			return 'ONU 变二层桥：本机不再拨号，由接 lan2/lan3/lan4 的下游设备拨号（无需配置 VLAN，' +
+				'ONU 代打业务标签）。管理口 lan1（2.5G）保持 192.168.1.1 可达，语音/IPTV/TR-069 不受影响。';
+		};
+
+		var vlanOpt = onuvlan.addOption(s, 'wan', '上网 VLAN ID',
 			'运营商上网业务 VLAN（北京联通 3961）。修改会重建 pon0 子设备（保留原 MAC）并重新拨号');
-		o.placeholder = '3961';
-		o.depends('_enable', '1');
+		vlanOpt.placeholder = '3961';
+		vlanOpt.depends('_enable', '1');
 
 		o = s.option(form.Value, 'username', 'PPPoE 账号');
 		o.depends('_enable', '1');
@@ -95,8 +192,11 @@ return view.extend({
 		o.default = o.enabled;
 		o.depends('_enable', '1');
 
+		var selfRef = this;
 		var self = this;
 		this.map = m;
+		this.protoOpt = protoOpt;
+		this.vlanOpt = vlanOpt;
 		var statusBox = E('div', { 'class': 'cbi-section' }, [E('h3', {}, '连接状态'), E('p', {}, '加载中…')]);
 
 		this.statusBox = statusBox;
@@ -115,7 +215,7 @@ return view.extend({
 						E('div', { 'class': 'cbi-section' }, [
 							E('h3', {}, '操作'),
 							E('div', { 'class': 'cbi-page-actions' }, [
-								E('button', {
+								self.reconnectBtn = E('button', {
 									'class': 'cbi-button cbi-button-action',
 									'click': ui.createHandlerFn(self, 'reconnect')
 								}, '保存并重新拨号'),
@@ -124,7 +224,8 @@ return view.extend({
 									'click': ui.createHandlerFn(self, 'reloadOnly')
 								}, '仅重载网络配置')
 							]),
-							E('p', { 'class': 'cbi-section-descr' }, '「保存并重新拨号」会先提交上方表单，再重启 wan 接口。')
+							E('p', { 'class': 'cbi-section-descr' },
+								'「保存并重新拨号」会先提交上方表单，再重启 wan 接口；桥接模式下改为应用桥接（仅重载，不拨号）。')
 						])
 					])
 				},
@@ -163,6 +264,31 @@ return view.extend({
 		var box = this.statusBox;
 		if (!box)
 			return;
+		/* 主按钮文案随「上网方式」表单值联动：桥接=保存并应用桥接 */
+		if (this.reconnectBtn) {
+			var pv = this.protoOpt ? this.protoOpt.formvalue('wan') : '';
+			this.reconnectBtn.textContent = (pv === 'bridge') ? '保存并应用桥接' : '保存并重新拨号';
+		}
+		/* 桥接模式：替代 ifstatus wan 表，显示 br-wan 实态 + 管理口提示 */
+		if (isBridgeMode()) {
+			return L.resolveDefault(fs.exec_direct('/sbin/ip', ['link', 'show', 'br-wan']), '').then(function(out) {
+				var rows = [];
+				function row(k, v) { rows.push(E('tr', { 'class': 'tr' }, [
+					E('td', { 'class': 'td left', 'style': 'width: 30%' }, k),
+					E('td', { 'class': 'td left' }, v == null || v === '' ? '-' : v) ])); }
+				row('模式', E('span', { 'class': 'label label-info' }, '桥接中——由下游设备拨号'));
+				var up = out ? /LOWER_UP|>,UP,/.test(out) : false;
+				row('br-wan 状态', out
+					? (up ? E('span', { 'class': 'label label-success' }, '已启用')
+						: E('span', { 'class': 'label label-warning' }, '存在但未启用'))
+					: E('span', { 'class': 'label label-warning' }, '不存在（保存并应用桥接后生成）'));
+				row('管理口', 'lan1（2.5G）保持 192.168.1.1 可达');
+				dom.content(box, [E('h3', {}, '连接状态'), E('table', { 'class': 'table' }, rows),
+					E('pre', { 'style': 'max-height: 10em; overflow: auto; margin: 0.5rem 0 0; ' +
+						'padding: 0.5em; background: rgba(127,127,127,0.08); font-size: 0.8125rem; white-space: pre-wrap;' },
+						(out || '').trim() || '（无输出）')]);
+			});
+		}
 		return L.resolveDefault(fs.exec_direct('/sbin/ifstatus', ['wan']), null).then(function(text) {
 			var st = {};
 			try { st = JSON.parse(text) || {}; } catch (e) {}
@@ -187,8 +313,65 @@ return view.extend({
 		return this.reloadOnly();
 	},
 
+	/* B11 模式切换确认弹窗：含 lan1 红字警告（ui.showModal 设备 ui.js 已核实存在） */
+	confirmModeSwitch: function(entering, confirmFn) {
+		var body = entering ? [
+			E('p', {}, '即将切换为桥接模式：ONU 本机不再拨号，由接 lan2/lan3/lan4 的下游设备拨号上网（无需配置 VLAN）。'),
+			E('p', { 'style': 'color: #d43f3a; font-weight: bold;' },
+				'⚠ 切换瞬间 lan2-4 全部断网——操作电脑必须先接到 lan1（2.5G 口）再点确认！'),
+			E('p', {}, '管理口 lan1 保持 192.168.1.1 可达；语音/IPTV/TR-069 不受影响。切换前自动备份 network 配置。')
+		] : [
+			E('p', {}, '即将切回路由模式（ONU 本机拨号），br-lan 恢复 lan1-4，PPPoE 账号等字段保留免重填。'),
+			E('p', { 'style': 'color: #d43f3a; font-weight: bold;' },
+				'⚠ 端口成员变化瞬间 lan2-4 会话中断——操作电脑请接在 lan1（2.5G 口）上执行。')
+		];
+		try {
+			ui.showModal('确认切换上网模式', body.concat([
+				E('div', { 'class': 'right' }, [
+					E('button', {
+						'class': 'cbi-button cbi-button-action',
+						'click': ui.createHandlerFn(this, function() { ui.hideModal(); confirmFn(); })
+					}, '确认切换'),
+					' ',
+					E('button', {
+						'class': 'cbi-button',
+						'click': ui.createHandlerFn(this, function() { ui.hideModal(); })
+					}, '取消')
+				])
+			]));
+		}
+		catch (e) {
+			if (window.confirm(entering
+				? '切换桥接模式：管理电脑必须先接 lan1！确认继续？'
+				: '切回路由模式：管理电脑须接 lan1。确认继续？'))
+				confirmFn();
+		}
+	},
+
 	reconnect: function() {
 		var self = this;
+		var pendingBridge = this.protoOpt ? this.protoOpt.formvalue('wan') === 'bridge' : false;
+		var curBridge = isBridgeMode();
+		/* 桥接态（进入/退出/已处于）一律走：确认弹窗 → cfg-bak → 保存 → uci.apply → network reload；
+		 * 不走 ifdown/ifup（红线规避，wan 已 none 也无拨号可重启） */
+		if (pendingBridge || curBridge) {
+			this.confirmModeSwitch(pendingBridge, function() {
+				cfgBak(pendingBridge ? 'b11-enter' : 'b11-exit')
+					.then(function() { return self.map.save(); })
+					.then(applyUci)
+					.then(function() { return self.reloadOnly(); })
+					.then(function() {
+						ui.addNotification(null, E('p', {}, pendingBridge
+							? '已保存并应用桥接，配置生效需数秒，约 10 秒后自动刷新状态。'
+							: '已保存并切回路由模式，约 10 秒后自动刷新状态。'), 'info');
+						setTimeout(function() { self.refreshStatus(); }, 10000);
+					})
+					.catch(function(err) {
+						ui.addNotification(null, E('p', {}, '操作失败：%s'.format(err.message)), 'danger');
+					});
+			});
+			return;
+		}
 		return this.map.save()
 			.then(applyUci)
 			.then(function() {
