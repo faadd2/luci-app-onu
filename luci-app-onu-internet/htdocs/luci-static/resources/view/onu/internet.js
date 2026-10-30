@@ -57,11 +57,13 @@ function findDevSec(name) {
 	return id;
 }
 
-/* 进入桥接：mode 标记 + br-wan 段（继承原 pon0_<vid> MAC，OLT 侧绑定不破）+ br-lan 缩口 */
+/* 进入桥接：mode 标记 + wan.device='br-wan'（关键：netifd 只认领 br-wan、不再抢 pon0.<vid>，
+ * 13:34 修复——原方案 netifd 为 wan(none) 持续占有 pon0.<vid>，reload 落定即把端口抢出桥）+ br-lan 缩口 */
 function applyBridgeUci(vid) {
 	var devName = 'pon0.' + vid;
 	uci.set('network', 'wan', 'proto', 'none');
 	uci.set('network', 'wan', 'mode', 'bridge');
+	uci.set('network', 'wan', 'device', 'br-wan');
 
 	var macSec = findDevSec(devName) || findDevSec(uci.get('network', 'wan', 'device') || '');
 	var mac = macSec ? uci.get('network', macSec, 'macaddr') : null;
@@ -77,13 +79,20 @@ function applyBridgeUci(vid) {
 	if (brlan) uci.set('network', brlan, 'ports', ['lan1']);
 }
 
-/* 退出桥接：清 mode/br_wan，br-lan 恢复 lan1-4（账号等字段留在 uci，免重填） */
+/* 退出桥接：清 mode/br_wan，wan.device 恢复 pon0.<vid>（从 br_wan ports[0] 取回），br-lan 恢复 lan1-4 */
 function removeBridgeUci() {
 	/* 注意：本机 LuCI 新版 uci.js 的 remove(conf,sid) 只收两参、删整段；
 	 * 删单个 option 必须用 unset（10-30 实机事故：remove 传三参把 wan 整段删没） */
 	uci.unset('network', 'wan', 'mode');
-	if (uci.get('network', 'br_wan'))
+	var dev = null;
+	if (uci.get('network', 'br_wan')) {
+		var ports = uci.get('network', 'br_wan', 'ports');
+		if (Array.isArray(ports) && ports.length)
+			dev = ports[0];
 		uci.remove('network', 'br_wan');
+	}
+	if (!dev) dev = 'pon0.3961';
+	uci.set('network', 'wan', 'device', dev);
 	var brlan = findDevSec('br-lan');
 	if (brlan) uci.set('network', brlan, 'ports', ['lan1', 'lan2', 'lan3', 'lan4']);
 }
@@ -127,12 +136,40 @@ function bridgeDownCmd() {
 	return 'ip link set dev br-wan down 2>/dev/null; ip link del br-wan 2>/dev/null; true';
 }
 
-/* netifd reload 是异步执行：立即跟进 ip 命令会与落定的 reload 竞态——
- * 13:17 实证 ip 建桥后 1 秒被迟到的 reload 抢回 pon0.3961 并拆桥。
- * 故 reload 与 ip 命令之间必须等落定（sleep 经 sh -c 白名单执行）。
- * 用户 10-30 13:17 批准新增此步骤。 */
-function netifdSettle() {
-	return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c', 'sleep 2.5; true']), '');
+/* 重试式建桥（用户 13:34 批准）：enslave 后自检 pon0.<vid> 真在桥内才返回成功，
+ * 否则等 3 秒重跑（整串幂等）；最多 6 次——不赌 reload 定时刻，自愈竞态。
+ * reload 慢达 15-30s（拆 pppoe+eth0 重新provision），固定 sleep 不可信（13:34 实证）。 */
+function bridgeEnsureUp(vid, mac, tries) {
+	tries = tries || 0;
+	return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c', bridgeUpCmd(vid, mac)]), '')
+		.then(function() {
+			return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c',
+				'ip link show master br-wan 2>/dev/null | grep -c pon0.']), '0');
+		})
+		.then(function(out) {
+			if (String(out).trim() === '1')
+				return true;
+			if (tries >= 5)
+				throw new Error('pon0.%s 重试 6 次仍未入桥——netifd 持续夺回，请切回 PPPoE 后报障'.format(vid));
+			return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c', 'sleep 3; true']), '')
+				.then(function() { return bridgeEnsureUp(vid, mac, tries + 1); });
+		});
+}
+
+/* 轮询式拆桥（用户 13:34 批准）：退桥时 reload 会把各端口从 br-wan 抢回（br-lan/pppoe），
+ * 轮询到 br-wan 成员清零（=reload 落定）再拆桥；最多 10 次×3 秒。 */
+function bridgeEnsureDown(tries) {
+	tries = tries || 0;
+	return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c',
+		'ip link show master br-wan 2>/dev/null | grep -c ": "']), '0')
+		.then(function(out) {
+			if (String(out).trim() === '0')
+				return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c', bridgeDownCmd()]), '');
+			if (tries >= 9)
+				throw new Error('等待 br-wan 端口释放超时（约 30 秒），请检查 netifd 状态');
+			return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c', 'sleep 3; true']), '')
+				.then(function() { return bridgeEnsureDown(tries + 1); });
+		});
 }
 
 return view.extend({
@@ -205,6 +242,31 @@ return view.extend({
 			'运营商上网业务 VLAN（北京联通 3961）。修改会重建 pon0 子设备（保留原 MAC）并重新拨号');
 		vlanOpt.placeholder = '3961';
 		vlanOpt.depends('_enable', '1');
+		/* 桥接态保护（13:34 修复连带）：此时 wan.device='br-wan'，原生 cfgvalue 解析不到 VLAN
+		 * 会显示空白，原生 write 还会把 device 覆写回 pon0.<vid> 破坏桥接——
+		 * 显示改从 br_wan ports[0] 取；写入后恢复 device='br-wan' 并同步 br_wan 端口 */
+		vlanOpt.cfgvalue = function() {
+			var v = parseVid(uci.get('network', 'wan', 'device') || '');
+			if (!v) {
+				var p = uci.get('network', 'br_wan', 'ports');
+				if (Array.isArray(p) && p.length)
+					v = parseVid(p[0]);
+			}
+			return v;
+		};
+		var _vlanWrite = vlanOpt.write;
+		vlanOpt.write = function(sectionId, value) {
+			var wasBridge = isBridgeMode();
+			_vlanWrite(sectionId, value);
+			if (wasBridge && value) {
+				uci.set('network', 'wan', 'device', 'br-wan');
+				var p = uci.get('network', 'br_wan', 'ports');
+				if (Array.isArray(p) && p.length) {
+					p[0] = 'pon0.' + String(value);
+					uci.set('network', 'br_wan', 'ports', p);
+				}
+			}
+		};
 
 		o = s.option(form.Value, 'username', 'PPPoE 账号');
 		o.depends('_enable', '1');
@@ -401,24 +463,17 @@ return view.extend({
 					.then(applyUci)
 					.then(function() { return self.reloadOnly(); })
 					.then(function() {
-						/* netifd reload 不建新 device 段（H-22）：进桥接=reload→等落定→手动建桥；
-						 * 退桥接=reload→等落定→拆桥→二次 reload（释放 pon0.<vid> 给 pppoe 重拨）。
-						 * 等落定必须：reload 异步，立即发 ip 命令会被迟到 reload 拆除（13:17 实证） */
+						/* netifd reload 不建新 device 段（H-22）→ 手动建桥；
+						 * 桥接态 wan.device='br-wan'（13:34 修复）→ netifd 不抢 pon0.<vid>；
+						 * 进=reload 后重试式建桥；退=reload 后轮询端口释放再拆桥（均用户批准） */
 						if (pendingBridge) {
-							var vid = parseVid(uci.get('network', 'wan', 'device') || '') || '3961';
+							var bp = uci.get('network', 'br_wan', 'ports');
+							var vid = parseVid((Array.isArray(bp) && bp.length) ? bp[0] : '') || '3961';
 							var mac = uci.get('network', 'br_wan', 'macaddr');
-							return netifdSettle().then(function() {
-								return L.resolveDefault(
-									fs.exec_direct('/bin/sh', ['-c', bridgeUpCmd(vid, mac)]), '');
-							});
+							return bridgeEnsureUp(vid, mac);
 						}
 						else if (curBridge) {
-							return netifdSettle()
-								.then(function() {
-									return L.resolveDefault(
-										fs.exec_direct('/bin/sh', ['-c', bridgeDownCmd()]), '');
-								})
-								.then(function() { return self.reloadOnly(); });
+							return bridgeEnsureDown();
 						}
 					})
 					.then(function() {
