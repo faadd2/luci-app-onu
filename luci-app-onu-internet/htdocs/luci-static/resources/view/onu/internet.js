@@ -102,6 +102,31 @@ function cfgBak(tag) {
 		.then(function() { return dst; });
 }
 
+/*
+ * netifd reload 不新建 device 段（10-30 双对照实验实证：bridge/8021q 新建段 reload 后均不出现；
+ * network.device ubus 仅有 status/set_state 等，无 setup/add）——新增 br-wan 必须由页面在 reload 后
+ * 用 ip 命令显式创建（设备实测 ip link add/enslave/del 全支持）。
+ * uci 里仍保留 br_wan 段：冷启动（重启）时 netifd 会按配置建桥，保证重启后桥接态持久。
+ */
+function bridgeUpCmd(vid, mac) {
+	var dev = 'pon0.' + vid;
+	var c = 'ip link add name br-wan type bridge 2>/dev/null; ';
+	if (mac)
+		c += 'ip link set dev br-wan address ' + mac + '; ';
+	c += 'ip link set dev ' + dev + ' master br-wan; ';
+	c += 'ip link set dev lan2 master br-wan; ip link set dev lan3 master br-wan; ';
+	c += 'ip link set dev lan4 master br-wan; ';
+	c += 'ip link set dev lan2 up; ip link set dev lan3 up; ip link set dev lan4 up; ';
+	c += 'ip link set dev br-wan up';
+	return c;
+}
+
+/* 退出桥接：reload 恢复 br-lan 端口（既有 device 变更 reload 生效，实证）后拆手动桥，再 reload 一次
+ * 让 wan(pppoe) 拿到释放后的 pon0.<vid>（第一次 reload 时 pon0.<vid> 还在 br-wan 里，必须二次 reload） */
+function bridgeDownCmd() {
+	return 'ip link set dev br-wan down 2>/dev/null; ip link del br-wan 2>/dev/null; true';
+}
+
 return view.extend({
 	load: function() {
 		return L.resolveDefault(fs.exec_direct('/sbin/ifstatus', ['wan']), '{}');
@@ -367,6 +392,21 @@ return view.extend({
 					.then(function(dst) { bakPath = dst; return self.map.save(); })
 					.then(applyUci)
 					.then(function() { return self.reloadOnly(); })
+					.then(function() {
+						/* netifd reload 不建新 device 段（H-22）：进桥接=reload 后手动建桥；
+						 * 退桥接=reload 后拆桥 + 二次 reload（释放 pon0.<vid> 给 pppoe） */
+						if (pendingBridge) {
+							var vid = parseVid(uci.get('network', 'wan', 'device') || '') || '3961';
+							var mac = uci.get('network', 'br_wan', 'macaddr');
+							return L.resolveDefault(
+								fs.exec_direct('/bin/sh', ['-c', bridgeUpCmd(vid, mac)]), '');
+						}
+						else if (curBridge) {
+							return L.resolveDefault(
+								fs.exec_direct('/bin/sh', ['-c', bridgeDownCmd()]), '')
+								.then(function() { return self.reloadOnly(); });
+						}
+					})
 					.then(function() {
 						ui.addNotification(null, E('p', {}, pendingBridge
 							? '已保存并应用桥接，配置生效需数秒，约 10 秒后自动刷新状态。（备份：%s）'.format(bakPath)
