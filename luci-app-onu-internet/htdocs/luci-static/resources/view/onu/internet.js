@@ -94,10 +94,12 @@ function cfgBak(tag) {
 	function pad(n) { return (n < 10 ? '0' : '') + n; }
 	var stamp = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) +
 		'-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
-	return L.resolveDefault(
-		fs.exec_direct('/bin/cp', ['/etc/config/network',
-			'/etc/config/network.bak-' + tag + '-' + stamp]), '')
-		.catch(function() {});
+	/* /bin/cp 不在 rpcd ACL 白名单（包内仅 /bin/sh -c * 通配），必须经 sh -c 执行；
+	 * 备份失败必须向调用方抛错中断切换（安全默认）——不得静默吞错继续切换
+	 * （10-30 实证：静默 catch 致切换后无备份文件，回退兜底缺失） */
+	var dst = '/etc/config/network.bak-' + tag + '-' + stamp;
+	return fs.exec_direct('/bin/sh', ['-c', 'cp /etc/config/network ' + dst])
+		.then(function() { return dst; });
 }
 
 return view.extend({
@@ -274,7 +276,8 @@ return view.extend({
 		}
 		/* 桥接模式：替代 ifstatus wan 表，显示 br-wan 实态 + 管理口提示 */
 		if (isBridgeMode()) {
-			return L.resolveDefault(fs.exec_direct('/sbin/ip', ['link', 'show', 'br-wan']), '').then(function(out) {
+			/* /sbin/ip 不在包 ACL 白名单，经 /bin/sh -c *（已授权通配）执行 */
+			return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c', 'ip link show br-wan']), '').then(function(out) {
 				var rows = [];
 				function row(k, v) { rows.push(E('tr', { 'class': 'tr' }, [
 					E('td', { 'class': 'td left', 'style': 'width: 30%' }, k),
@@ -359,18 +362,23 @@ return view.extend({
 		 * 不走 ifdown/ifup（红线规避，wan 已 none 也无拨号可重启） */
 		if (pendingBridge || curBridge) {
 			this.confirmModeSwitch(pendingBridge, function() {
+				var bakPath = null;
 				cfgBak(pendingBridge ? 'b11-enter' : 'b11-exit')
-					.then(function() { return self.map.save(); })
+					.then(function(dst) { bakPath = dst; return self.map.save(); })
 					.then(applyUci)
 					.then(function() { return self.reloadOnly(); })
 					.then(function() {
 						ui.addNotification(null, E('p', {}, pendingBridge
-							? '已保存并应用桥接，配置生效需数秒，约 10 秒后自动刷新状态。'
-							: '已保存并切回路由模式，约 10 秒后自动刷新状态。'), 'info');
+							? '已保存并应用桥接，配置生效需数秒，约 10 秒后自动刷新状态。（备份：%s）'.format(bakPath)
+							: '已保存并切回路由模式，约 10 秒后自动刷新状态。（备份：%s）'.format(bakPath)), 'info');
 						setTimeout(function() { self.refreshStatus(); }, 10000);
 					})
 					.catch(function(err) {
-						ui.addNotification(null, E('p', {}, '操作失败：%s'.format(err.message)), 'danger');
+						/* 备份失败必须中止切换（此时 map.save 未执行，配置未动） */
+						ui.addNotification(null, E('p', {}, bakPath === null
+							? '切换已中止：自动备份失败（%s）。未改动任何配置，请手动备份 /etc/config/network 后重试。'
+								.format(err.message || err)
+							: '操作失败：%s'.format(err.message)), 'danger');
 					});
 			});
 			return;
