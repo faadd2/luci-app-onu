@@ -127,6 +127,14 @@ function bridgeDownCmd() {
 	return 'ip link set dev br-wan down 2>/dev/null; ip link del br-wan 2>/dev/null; true';
 }
 
+/* netifd reload 是异步执行：立即跟进 ip 命令会与落定的 reload 竞态——
+ * 13:17 实证 ip 建桥后 1 秒被迟到的 reload 抢回 pon0.3961 并拆桥。
+ * 故 reload 与 ip 命令之间必须等落定（sleep 经 sh -c 白名单执行）。
+ * 用户 10-30 13:17 批准新增此步骤。 */
+function netifdSettle() {
+	return L.resolveDefault(fs.exec_direct('/bin/sh', ['-c', 'sleep 2.5; true']), '');
+}
+
 return view.extend({
 	load: function() {
 		return L.resolveDefault(fs.exec_direct('/sbin/ifstatus', ['wan']), '{}');
@@ -393,17 +401,23 @@ return view.extend({
 					.then(applyUci)
 					.then(function() { return self.reloadOnly(); })
 					.then(function() {
-						/* netifd reload 不建新 device 段（H-22）：进桥接=reload 后手动建桥；
-						 * 退桥接=reload 后拆桥 + 二次 reload（释放 pon0.<vid> 给 pppoe） */
+						/* netifd reload 不建新 device 段（H-22）：进桥接=reload→等落定→手动建桥；
+						 * 退桥接=reload→等落定→拆桥→二次 reload（释放 pon0.<vid> 给 pppoe 重拨）。
+						 * 等落定必须：reload 异步，立即发 ip 命令会被迟到 reload 拆除（13:17 实证） */
 						if (pendingBridge) {
 							var vid = parseVid(uci.get('network', 'wan', 'device') || '') || '3961';
 							var mac = uci.get('network', 'br_wan', 'macaddr');
-							return L.resolveDefault(
-								fs.exec_direct('/bin/sh', ['-c', bridgeUpCmd(vid, mac)]), '');
+							return netifdSettle().then(function() {
+								return L.resolveDefault(
+									fs.exec_direct('/bin/sh', ['-c', bridgeUpCmd(vid, mac)]), '');
+							});
 						}
 						else if (curBridge) {
-							return L.resolveDefault(
-								fs.exec_direct('/bin/sh', ['-c', bridgeDownCmd()]), '')
+							return netifdSettle()
+								.then(function() {
+									return L.resolveDefault(
+										fs.exec_direct('/bin/sh', ['-c', bridgeDownCmd()]), '');
+								})
 								.then(function() { return self.reloadOnly(); });
 						}
 					})
