@@ -79,7 +79,9 @@ function applyBridgeUci(vid) {
 
 /* 退出桥接：清 mode/br_wan，br-lan 恢复 lan1-4（账号等字段留在 uci，免重填） */
 function removeBridgeUci() {
-	uci.remove('network', 'wan', 'mode');
+	/* 注意：本机 LuCI 新版 uci.js 的 remove(conf,sid) 只收两参、删整段；
+	 * 删单个 option 必须用 unset（10-30 实机事故：remove 传三参把 wan 整段删没） */
+	uci.unset('network', 'wan', 'mode');
 	if (uci.get('network', 'br_wan'))
 		uci.remove('network', 'br_wan');
 	var brlan = findDevSec('br-lan');
@@ -128,6 +130,7 @@ return view.extend({
 		};
 		en.remove = function() {};
 
+		var o = null;
 		var protoOpt = s.option(form.ListValue, 'proto', '上网方式');
 		protoOpt.value('pppoe', 'PPPoE 拨号');
 		protoOpt.value('dhcp', 'DHCP 客户端');
