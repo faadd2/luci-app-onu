@@ -3,21 +3,22 @@
 #  - 持久化探针: tcpdump -w /root/pcaps/acs-<时间戳>.pcap（重启不丢，每次启动新文件）
 #  - 显示探针:  tcpdump -l 文本输出 → /tmp/acs-capture.log（管理页"抓取原始记录"滚动数据源）
 #  - 页面: oun > ACS 管理 > 调试 > 报文抓取（开始/停止/下载 + 开机自启勾选）
+#  - 10-30 时序修复（H-23）: S98 早于 pppoe-tr069 创建，启动改为"等接口"模式——
+#    接口未建时挂后台等待器（最长 120s，每秒探测），接口出现即拉起双探针；
+#    等待器 pid 记 /run/onu-acscap-wait.pid，stop 先杀等待器（等待中点停止=取消蹲守）。
 START=98
 STOP=10
 
 PIDFILE=/run/onu-acscap.pid
 DPIDFILE=/run/onu-acscap-display.pid
+WPIDFILE=/run/onu-acscap-wait.pid
 CLOG=/tmp/acs-capture.log
 IFACE=pppoe-tr069
 FILTER="port 7547 or port 9090"
 PCAP_DIR=/root/pcaps
+WAIT_MAX=120
 
-start() {
-    mkdir -p "$PCAP_DIR"
-    if [ -s "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-        return 0
-    fi
+start_probes() {
     local f="$PCAP_DIR/acs-$(date +%Y%m%d_%H%M%S).pcap"
     setsid /usr/bin/tcpdump -i "$IFACE" -s 0 -nn -U -w "$f" "$FILTER" \
         >/dev/null 2>&1 </dev/null &
@@ -27,9 +28,41 @@ start() {
     setsid /usr/bin/tcpdump -i "$IFACE" -s 0 -nn -l "$FILTER" \
         > "$CLOG" 2>&1 </dev/null &
     echo $! > "$DPIDFILE"
+    rm -f "$WPIDFILE"
+}
+
+start() {
+    mkdir -p "$PCAP_DIR"
+    if [ -s "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        return 0
+    fi
+    if [ -s "$WPIDFILE" ] && kill -0 "$(cat "$WPIDFILE")" 2>/dev/null; then
+        return 0
+    fi
+    if ip link show "$IFACE" >/dev/null 2>&1; then
+        start_probes
+        return 0
+    fi
+    # 接口未建（开机早期 / tr069 线未通）：后台等待，出现即拉起
+    (
+        i=0
+        while [ "$i" -lt "$WAIT_MAX" ]; do
+            ip link show "$IFACE" >/dev/null 2>&1 && break
+            sleep 1
+            i=$((i + 1))
+        done
+        if ip link show "$IFACE" >/dev/null 2>&1; then
+            start_probes
+        else
+            echo "$(date '+%F %T') $IFACE not up after ${WAIT_MAX}s, capture not started" >> "$CLOG"
+            rm -f "$WPIDFILE"
+        fi
+    ) >/dev/null 2>&1 </dev/null &
+    echo $! > "$WPIDFILE"
 }
 
 stop() {
+    [ -f "$WPIDFILE" ] && { kill "$(cat "$WPIDFILE")" 2>/dev/null; rm -f "$WPIDFILE"; }
     [ -f "$PIDFILE" ] && { kill "$(cat "$PIDFILE")" 2>/dev/null; rm -f "$PIDFILE"; }
     [ -f "$DPIDFILE" ] && { kill "$(cat "$DPIDFILE")" 2>/dev/null; rm -f "$DPIDFILE"; }
 }

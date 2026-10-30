@@ -1,0 +1,55 @@
+#!/bin/sh
+# onu-acscap-test — ACS 抓包引擎自检（H-23 时序修复的回归验证脚本）
+# 硬判项（FAIL，退出码 1）: 接口在 / 探针存活且 /proc/<pid>/cmdline 确为 tcpdump
+#   ——专治 H-23 病根"stale pid 假阳性"：pid 文件在但进程早死（或 pid 被复用）一律 FAIL
+# 软判项（WARN 不失败）: CLOG 自探针启动后有 ≥1 报文行
+#   ——tr069 业务 300s 低频，短窗内零报文属正常，不当作引擎故障
+IFACE=pppoe-tr069
+PIDFILE=/run/onu-acscap.pid
+DPIDFILE=/run/onu-acscap-display.pid
+WPIDFILE=/run/onu-acscap-wait.pid
+CLOG=/tmp/acs-capture.log
+FAIL=0
+
+check() {
+    if [ -n "$2" ]; then
+        echo "PASS  $1"
+    else
+        echo "FAIL  $1"
+        FAIL=1
+    fi
+}
+
+warn() {
+    if [ -n "$2" ]; then
+        echo "PASS  $1"
+    else
+        echo "WARN  $1（tr069 可能暂无流量，非引擎故障）"
+    fi
+}
+
+# 探针健康：pid 文件在 + 进程在 + cmdline 确为 tcpdump（防 stale pid / pid 复用假阳性）
+probe_ok() {
+    [ -s "$1" ] || return 1
+    _p="$(cat "$1")"
+    [ -n "$_p" ] && [ -d "/proc/$_p" ] || return 1
+    grep -q tcpdump "/proc/$_p/cmdline" 2>/dev/null
+}
+
+check "接口 $IFACE 存在" "$(ip link show $IFACE 2>/dev/null)"
+
+WAITING=""
+if probe_ok "$WPIDFILE"; then
+    WAITING="yes"
+    check "引擎活动（等待器存活，接口未建待拉起）" yes
+elif probe_ok "$PIDFILE"; then
+    check "持久探针存活且为 tcpdump" yes
+    check "显示探针存活且为 tcpdump" "$(probe_ok "$DPIDFILE" && echo yes)"
+    F1="$(ls -t /root/pcaps/acs-*.pcap 2>/dev/null | head -1)"
+    check "pcap 文件已创建（$(basename "$F1")）" "$F1"
+    warn "CLOG 已有报文行（端到端活跃）" "$( [ -f "$CLOG" ] && [ "$(wc -l < "$CLOG")" -gt 0 ] && echo yes )"
+else
+    check "引擎活动（等待器/探针均不在，且未声称运行）" ""
+fi
+
+exit $FAIL
